@@ -1,0 +1,26 @@
+{
+	"name": "obsidian-calendar-connect",
+	"version": "0.1.0",
+	"description": "Show Google Calendar events from a code block in Obsidian.",
+	"main": "main.js",
+	"scripts": {
+		"dev": "node esbuild.config.mjs",
+		"build": "tsc --noEmit --skipLibCheck && node esbuild.config.mjs production",
+		"typecheck": "tsc --noEmit --skipLibCheck",
+		"test": "esbuild tests/spec.ts --bundle --platform=node --format=cjs --target=node20 --alias:obsidian=./tests/obsidian-shim.ts --outfile=tests/.build/spec.cjs --log-level=warning && node tests/.build/spec.cjs"
+	},
+	"keywords": [
+		"obsidian",
+		"google-calendar"
+	],
+	"license": "MIT",
+	"devDependencies": {
+		"@types/node": "^20.14.0",
+		"esbuild": "^0.25.0",
+		"moment": "^2.30.1",
+		"obsidian": "1.13.1",
+		"tslib": "^2.6.3",
+		"typescript": "^5.5.0",
+		"yaml": "^2.5.0"
+	}
+}

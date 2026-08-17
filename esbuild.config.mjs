@@ -1,0 +1,48 @@
+import esbuild from "esbuild";
+import process from "process";
+import { builtinModules } from "module";
+
+const banner = `/*
+THIS IS A GENERATED FILE. Do not edit — change the sources under src/ and rebuild.
+*/
+`;
+
+const production = process.argv[2] === "production";
+
+const context = await esbuild.context({
+	banner: { js: banner },
+	entryPoints: ["src/main.ts"],
+	bundle: true,
+	external: [
+		"obsidian",
+		"electron",
+		"@codemirror/autocomplete",
+		"@codemirror/collab",
+		"@codemirror/commands",
+		"@codemirror/language",
+		"@codemirror/lint",
+		"@codemirror/search",
+		"@codemirror/state",
+		"@codemirror/view",
+		"@lezer/common",
+		"@lezer/highlight",
+		"@lezer/lr",
+		// Node built-ins stay external; Obsidian supplies them on desktop.
+		...builtinModules,
+		...builtinModules.map((m) => `node:${m}`),
+	],
+	format: "cjs",
+	target: "es2020",
+	logLevel: "info",
+	sourcemap: production ? false : "inline",
+	treeShaking: true,
+	outfile: "main.js",
+	minify: production,
+});
+
+if (production) {
+	await context.rebuild();
+	process.exit(0);
+} else {
+	await context.watch();
+}
