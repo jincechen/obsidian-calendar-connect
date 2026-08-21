@@ -1,12 +1,13 @@
+import { moment, type Moment } from "./moment-shim";
 import { AuthError, ReauthRequiredError, type GoogleAuth } from "./auth";
 import { HttpError, parseGoogleError, request, type HttpResponse } from "./http";
 import { safeColor } from "./safety";
 import { calendarKey } from "./settings";
-import type { CalendarInfo, RawCalendarListEntry } from "./types";
+import type { Attendee, CalEvent, CalendarInfo, RawAttendee, RawCalendarListEntry, RawEvent } from "./types";
 
 const API_BASE = "https://www.googleapis.com/calendar/v3";
 const PAGE_SIZE = 250;
-/** Guard against a runaway listing. */
+/** Guard against a runaway range pulling an entire calendar history. */
 const MAX_PAGES = 10;
 
 export type CalendarApiErrorKind =
@@ -38,6 +39,14 @@ export interface AccountRef {
 	label: string;
 }
 
+export interface EventQuery {
+	calendarId: string;
+	timeMin: Moment;
+	timeMax: Moment;
+	/** Google full-text search across title, description, location and attendees. */
+	search?: string;
+}
+
 const RATE_LIMIT_REASONS = new Set(["rateLimitExceeded", "userRateLimitExceeded"]);
 const QUOTA_REASONS = new Set(["quotaExceeded", "dailyLimitExceeded"]);
 const API_DISABLED_REASONS = new Set(["accessNotConfigured", "SERVICE_DISABLED"]);
@@ -61,6 +70,125 @@ function kindFor(status: number, reason: string | undefined, message: string): C
 function errorFromResponse(response: HttpResponse): CalendarApiError {
 	const { message, reason } = parseGoogleError(response.json, response.text);
 	return new CalendarApiError(message, kindFor(response.status, reason, message), response.status, reason);
+}
+
+/** Decodes the handful of entities Google's rich-text descriptions use. */
+function decodeEntities(text: string): string {
+	return (
+		text
+			.replace(/&nbsp;/g, " ")
+			.replace(/&lt;/g, "<")
+			.replace(/&gt;/g, ">")
+			.replace(/&quot;/g, '"')
+			.replace(/&#39;|&apos;/g, "'")
+			.replace(/&#(\d+);/g, (whole, code: string) => fromCodePoint(Number(code)) ?? whole)
+			.replace(/&#x([0-9a-f]+);/gi, (whole, code: string) => fromCodePoint(parseInt(code, 16)) ?? whole)
+			// Last, so "&amp;lt;" becomes the literal text "&lt;" rather than "<".
+			.replace(/&amp;/g, "&")
+	);
+}
+
+function fromCodePoint(code: number): string | null {
+	if (!Number.isInteger(code) || code <= 0 || code > 0x10ffff) return null;
+	return String.fromCodePoint(code);
+}
+
+/**
+ * Flattens an HTML description to plain text. The result is only ever rendered
+ * as text, so decoded `<` characters are harmless there.
+ */
+export function stripHtml(html: string): string {
+	return decodeEntities(
+		html
+			.replace(/<br\s*\/?>/gi, "\n")
+			.replace(/<\/(p|div|li|tr|h[1-6])>/gi, "\n")
+			.replace(/<[^>]+>/g, "")
+	)
+		.replace(/\n{3,}/g, "\n\n")
+		.trim();
+}
+
+const HTML_PATTERN = /<[a-z][\s\S]*>/i;
+const RFC3339_PREFIX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+
+function meetUrlOf(raw: RawEvent): string | undefined {
+	if (raw.hangoutLink) return raw.hangoutLink;
+	const video = raw.conferenceData?.entryPoints?.find((entry) => entry.entryPointType === "video");
+	return video?.uri || undefined;
+}
+
+function toAttendee(raw: RawAttendee): Attendee {
+	return {
+		email: raw.email,
+		name: raw.displayName,
+		response: raw.responseStatus,
+		self: Boolean(raw.self),
+		organizer: Boolean(raw.organizer),
+		optional: Boolean(raw.optional),
+		resource: Boolean(raw.resource),
+	};
+}
+
+/**
+ * Google's wire event as a `CalEvent`, or null when it has no id or no usable
+ * start and end. Links are kept as given; rendering gates them with
+ * `safeExternalUrl`.
+ */
+export function normaliseEvent(raw: RawEvent, calendar: CalendarInfo): CalEvent | null {
+	if (!raw.id) return null;
+	const startRaw = raw.start;
+	const endRaw = raw.end;
+	if (!startRaw || !endRaw) return null;
+
+	const allDay = Boolean(startRaw.date);
+	let start: Moment;
+	let end: Moment;
+	if (allDay) {
+		if (!startRaw.date || !endRaw.date) return null;
+		start = moment(startRaw.date, "YYYY-MM-DD", true).startOf("day");
+		// Google's all-day end date is exclusive; pull it back so display maths is inclusive.
+		end = moment(endRaw.date, "YYYY-MM-DD", true).subtract(1, "day").endOf("day");
+	} else {
+		// `moment(undefined)` would be "now", so absent values must be caught first.
+		if (!startRaw.dateTime || !endRaw.dateTime) return null;
+		// Google sends RFC 3339; anything else would hit moment's unreliable Date() fallback.
+		if (!RFC3339_PREFIX.test(startRaw.dateTime) || !RFC3339_PREFIX.test(endRaw.dateTime)) return null;
+		start = moment(startRaw.dateTime);
+		end = moment(endRaw.dateTime);
+	}
+	if (!start.isValid() || !end.isValid()) return null;
+	if (end.isBefore(start)) end = allDay ? start.clone().endOf("day") : start.clone();
+
+	const attendees = (raw.attendees ?? []).map(toAttendee);
+	const description = raw.description
+		? (HTML_PATTERN.test(raw.description) ? stripHtml(raw.description) : raw.description.trim()) || undefined
+		: undefined;
+
+	return {
+		id: raw.id,
+		calendarKey: calendar.key,
+		calendarId: calendar.id,
+		calendarName: calendar.name,
+		calendarColor: calendar.color,
+		accountId: calendar.accountId,
+		accountLabel: calendar.accountLabel,
+
+		title: raw.summary?.trim() || "(no title)",
+		start,
+		end,
+		allDay,
+		location: raw.location?.trim() || undefined,
+		description,
+		link: raw.htmlLink || undefined,
+		meetUrl: meetUrlOf(raw),
+		status: raw.status,
+
+		organizer: raw.organizer?.displayName ?? raw.organizer?.email,
+		attendees,
+		selfResponse: attendees.find((attendee) => attendee.self)?.response,
+
+		recurring: Boolean(raw.recurringEventId) || Boolean(raw.recurrence?.length),
+	};
 }
 
 function asObject(value: unknown): Record<string, unknown> {
@@ -143,6 +271,37 @@ export class GoogleCalendarClient {
 	async fetchPrimaryAddress(): Promise<string | null> {
 		const body = asObject((await this.call("GET", "/users/me/calendarList/primary")).json);
 		return typeof body.id === "string" && body.id !== "" ? body.id : null;
+	}
+
+	async listEvents(query: EventQuery, calendar: CalendarInfo): Promise<CalEvent[]> {
+		const events: CalEvent[] = [];
+		let pageToken: string | undefined;
+		let page = 0;
+
+		do {
+			const params: Record<string, string> = {
+				singleEvents: "true",
+				orderBy: "startTime",
+				maxResults: String(PAGE_SIZE),
+				timeMin: query.timeMin.toISOString(),
+				timeMax: query.timeMax.toISOString(),
+			};
+			if (query.search) params.q = query.search;
+			if (pageToken) params.pageToken = pageToken;
+
+			const response = await this.call("GET", `/calendars/${encodeURIComponent(query.calendarId)}/events`, {
+				query: params,
+			});
+			const body = asObject(response.json);
+			const items = Array.isArray(body.items) ? (body.items as RawEvent[]) : [];
+			for (const raw of items) {
+				const event = raw ? normaliseEvent(raw, calendar) : null;
+				if (event) events.push(event);
+			}
+			pageToken = typeof body.nextPageToken === "string" ? body.nextPageToken : undefined;
+		} while (pageToken && ++page < MAX_PAGES);
+
+		return events;
 	}
 
 }

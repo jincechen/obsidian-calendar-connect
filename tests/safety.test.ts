@@ -1,4 +1,4 @@
-import { safeColor, safeExternalUrl } from "../src/safety";
+import { mapsUrl, markdownInline, safeColor, safeExternalUrl, truncate } from "../src/safety";
 import { check } from "./harness";
 
 // --- safeColor ---------------------------------------------------------------
@@ -56,3 +56,27 @@ for (const bad of [
 ]) {
 	check(`safeExternalUrl rejects ${JSON.stringify(bad)}`, safeExternalUrl(bad), null);
 }
+
+// --- mapsUrl -----------------------------------------------------------------
+check(
+	"mapsUrl encodes the location",
+	mapsUrl("Room 4 & 5, 10 Downing St #2"),
+	"https://www.google.com/maps/search/?api=1&query=Room%204%20%26%205%2C%2010%20Downing%20St%20%232"
+);
+check("mapsUrl is always https and safe", safeExternalUrl(mapsUrl("javascript:alert(1)")) !== null, true);
+
+// --- truncate ------------------------------------------------------------------
+check("truncate: 0 shows nothing", truncate("hello", 0), "");
+check("truncate: negative shows nothing", truncate("hello", -3), "");
+check("truncate: short text unchanged", truncate("hello", 10), "hello");
+check("truncate: exact length unchanged", truncate("hello", 5), "hello");
+check("truncate: long text gets an ellipsis", truncate("hello world", 5), "hello…");
+check("truncate: trailing space trimmed before the ellipsis", truncate("hello world", 6), "hello…");
+
+// --- markdownInline: event text pasted into a note stays inert ---------------
+// Every syntax character gains a backslash, so it renders literally.
+const escaped = (text: string) => text.replace(/[`![\]()<>%*]/g, (c) => "\\" + c);
+check("markdownInline flattens lines", markdownInline("a\n```js\nx\n```"), escaped("a ```js x ```"));
+check("markdownInline escapes images", markdownInline("![](https://evil/p)"), escaped("![](https://evil/p)"));
+check("markdownInline escapes html and templater", markdownInline("<%* x %>"), escaped("<%* x %>"));
+check("markdownInline keeps plain text", markdownInline("  Team sync 3pm "), "Team sync 3pm");

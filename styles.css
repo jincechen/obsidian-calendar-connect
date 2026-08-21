@@ -1,3 +1,436 @@
+/* Calendar Connect — styled only with Obsidian's theme variables, so blocks
+   follow light/dark mode, community themes and Style Settings tweaks.
+   The one colour that comes from Google, a calendar's colour, enters only through
+   --cc-color (set from a validated hex), always with the accent as fallback. */
+
+.cc-block {
+	--cc-color-fallback: var(--interactive-accent);
+	--cc-time-width: 6.4em;
+	container-type: inline-size;
+	font-size: var(--font-ui-small);
+	line-height: var(--line-height-tight);
+}
+
+.cc-block.cc-12h {
+	--cc-time-width: 8.8em;
+}
+
+/* Shared icon controls (Obsidian's .clickable-icon), kept small inside rows. */
+.cc-block .clickable-icon {
+	--icon-size: var(--icon-xs);
+	flex: 0 0 auto;
+	padding: var(--size-2-1);
+	border-radius: var(--clickable-icon-radius);
+	color: var(--text-faint);
+}
+
+.cc-block .clickable-icon:hover {
+	color: var(--text-normal);
+	background: var(--background-modifier-hover);
+}
+
+.cc-block .clickable-icon:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -1px;
+}
+
+/* ===================================================================
+   List view — one line per event
+   =================================================================== */
+
+.cc-day-header {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-height: 1.9em;
+	padding: 0 var(--size-4-1);
+	margin-bottom: var(--size-2-1);
+}
+
+.cc-day-label {
+	font-weight: var(--font-semibold);
+	color: var(--text-normal);
+}
+
+.cc-group.is-today .cc-day-label {
+	color: var(--text-accent);
+}
+
+.cc-day-count {
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+}
+
+/* The ⋯ button stays out of the way until the row is pointed at or focused. */
+.cc-block .cc-row-more {
+	opacity: 0;
+	transition: opacity 100ms ease;
+}
+
+.cc-block .cc-event:hover .cc-row-more,
+.cc-block .cc-event:focus-within .cc-row-more,
+.cc-block .cc-row-more:focus-visible {
+	opacity: 1;
+}
+
+/* ===================================================================
+   Agenda view — cards grouped by day
+   =================================================================== */
+
+.cc-group + .cc-group {
+	margin-top: var(--size-4-4);
+}
+
+.cc-group-heading {
+	padding-bottom: var(--size-2-2);
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-bottom: var(--size-4-1);
+}
+
+.cc-agenda {
+	display: flex;
+	flex-direction: column;
+	gap: var(--size-2-2);
+}
+
+.cc-event {
+	display: grid;
+	/* max-content lets a wider label (12-hour ranges) push the column out rather
+	   than overflow it. Every row in a block shares a format, so they stay aligned. */
+	grid-template-columns: minmax(var(--cc-time-width), max-content) minmax(0, 1fr);
+	gap: var(--size-4-3);
+	padding: var(--size-4-1) var(--size-4-1) var(--size-4-1) var(--size-4-2);
+	border-left: 2px solid var(--cc-color, var(--cc-color-fallback));
+	border-radius: var(--radius-s);
+	cursor: pointer;
+	transition: background-color 100ms ease;
+}
+
+.cc-event.no-gutter {
+	grid-template-columns: minmax(0, 1fr);
+}
+
+.cc-event:hover {
+	background: var(--background-modifier-hover);
+}
+
+.cc-event:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+.cc-event.is-all-day {
+	border-left-style: dashed;
+}
+
+.cc-event-time {
+	padding-top: 0.15em;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.cc-event-title-line {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+}
+
+.cc-event-title {
+	flex: 0 1 auto;
+	min-width: 0;
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
+.cc-event-title-line .cc-row-more {
+	margin-left: auto;
+}
+
+.cc-meta {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	min-width: 0;
+	margin-top: var(--size-2-1);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+/* Short metadata flows on one wrapping line, bullet-separated. */
+.cc-meta-row {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 0 var(--size-4-2);
+	margin-top: var(--size-2-1);
+}
+
+.cc-meta-row .cc-meta {
+	margin-top: 0;
+}
+
+.cc-meta-icon {
+	--icon-size: var(--icon-xs);
+	display: inline-flex;
+	flex: 0 0 auto;
+	color: var(--text-faint);
+}
+
+.cc-meta-text {
+	overflow: hidden;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.cc-meta-description .cc-meta-text {
+	white-space: normal;
+}
+
+.cc-event.is-declined .cc-event-title {
+	color: var(--text-faint);
+	text-decoration: line-through;
+}
+
+.cc-event.is-tentative .cc-event-title {
+	font-style: italic;
+}
+
+/* ===================================================================
+   Table view
+   =================================================================== */
+
+.cc-table-wrapper {
+	overflow-x: auto;
+}
+
+.cc-block .cc-table {
+	width: 100%;
+	margin: 0;
+	border-collapse: collapse;
+	font-size: var(--font-ui-small);
+}
+
+.cc-block .cc-table th {
+	padding: var(--size-2-2) var(--size-4-3) var(--size-2-3) 0;
+	border: none;
+	border-bottom: 1px solid var(--background-modifier-border);
+	background: transparent;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smallest);
+	font-weight: var(--font-semibold);
+	text-align: left;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	white-space: nowrap;
+}
+
+.cc-block .cc-table td {
+	padding: var(--size-2-2) var(--size-4-3) var(--size-2-2) 0;
+	border: none;
+	border-bottom: 1px solid var(--background-modifier-border);
+	color: var(--text-normal);
+	vertical-align: top;
+}
+
+.cc-table-row {
+	cursor: pointer;
+}
+
+.cc-table-row:hover {
+	background: var(--background-modifier-hover);
+}
+
+.cc-table-row:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+.cc-table .cc-col-date,
+.cc-table .cc-col-time,
+.cc-table .cc-col-duration {
+	width: 1%;
+	color: var(--text-muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
+.cc-table .cc-col-description {
+	color: var(--text-muted);
+}
+
+.cc-table-row.is-declined .cc-col-title {
+	text-decoration: line-through;
+}
+
+.cc-table-row.is-tentative .cc-col-title {
+	font-style: italic;
+}
+
+.cc-dot {
+	display: inline-block;
+	width: 0.6em;
+	height: 0.6em;
+	margin-right: var(--size-2-3);
+	border-radius: 50%;
+	background: var(--cc-color, var(--cc-color-fallback));
+}
+
+/* ===================================================================
+   Shared: links, empty state, warnings, footer, messages
+   =================================================================== */
+
+.cc-link {
+	color: var(--text-accent);
+	text-decoration: none;
+	cursor: pointer;
+}
+
+.cc-link:hover {
+	text-decoration: underline;
+}
+
+.cc-empty {
+	padding: var(--size-4-1);
+	color: var(--text-faint);
+}
+
+.cc-warning {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--size-2-3);
+	margin-bottom: var(--size-4-2);
+	padding: var(--size-2-3) var(--size-4-2);
+	border-radius: var(--radius-s);
+	background: var(--background-secondary);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.cc-warning-icon {
+	--icon-size: var(--icon-xs);
+	display: inline-flex;
+	flex: 0 0 auto;
+	padding-top: 0.1em;
+	color: var(--text-warning);
+}
+
+.cc-footer {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-1);
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	transition: opacity 120ms ease;
+}
+
+/* With a pointer, the footer appears when the block is pointed at or focused. */
+@media (hover: hover) {
+	body:not(.is-mobile) .cc-footer {
+		opacity: 0;
+	}
+
+	body:not(.is-mobile) .cc-block:hover .cc-footer,
+	body:not(.is-mobile) .cc-block:focus-within .cc-footer {
+		opacity: 1;
+	}
+}
+
+.cc-footer-spacer {
+	flex: 1 1 auto;
+}
+
+.cc-updated {
+	white-space: nowrap;
+}
+
+.cc-message {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: var(--size-2-3);
+	padding: var(--size-4-3) var(--size-4-4);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+	background: var(--background-secondary);
+}
+
+.cc-message-error {
+	border-color: var(--background-modifier-error);
+}
+
+.cc-message-title {
+	display: flex;
+	align-items: center;
+	gap: var(--size-2-3);
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
+.cc-message-icon {
+	--icon-size: var(--icon-s);
+	display: inline-flex;
+	color: var(--text-muted);
+}
+
+.cc-message-error .cc-message-icon {
+	color: var(--text-error);
+}
+
+.cc-message-detail {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.5;
+}
+
+.cc-message-action {
+	margin-top: var(--size-2-1);
+	cursor: pointer;
+}
+
+/* ===================================================================
+   Narrow blocks and touch
+   =================================================================== */
+
+/* The block is its own size container and cannot query itself, so the narrower
+   time column is set on its children, which pass it down. */
+@container (max-width: 360px) {
+	.cc-block > * {
+		--cc-time-width: 4em;
+	}
+
+	.cc-block.cc-12h > * {
+		--cc-time-width: 4.8em;
+	}
+}
+
+.is-mobile .cc-block .clickable-icon {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 32px;
+	min-height: 32px;
+}
+
+.is-mobile .cc-block .cc-row-more {
+	opacity: 1;
+}
+
+@media (hover: none) {
+	.cc-block .cc-row-more {
+		opacity: 1;
+	}
+
+	.cc-block .clickable-icon {
+		min-width: 32px;
+		min-height: 32px;
+	}
+}
+
 /* ===================================================================
    Consent modal
    (.cc-consent on the modal content)

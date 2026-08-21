@@ -1,9 +1,106 @@
 import { AuthError, GoogleAuth, ReauthRequiredError } from "../src/auth";
-import { describeError, GoogleCalendarClient, CalendarApiError } from "../src/google";
+import { describeError, GoogleCalendarClient, CalendarApiError, normaliseEvent, stripHtml } from "../src/google";
 import { HttpError, setSleep } from "../src/http";
+import { moment } from "../src/moment-shim";
+import type { RawEvent } from "../src/types";
+import { makeCalendar } from "./fixtures";
 import { check } from "./harness";
 import { serial } from "./http.test";
 import { requestUrlMock, type ShimRequest, type ShimResponse } from "./obsidian-shim";
+
+// --- stripHtml -------------------------------------------------------------------
+
+check("stripHtml tags and breaks", stripHtml("<p>Hello <b>there</b></p><p>Line<br>two</p>"), "Hello there\nLine\ntwo");
+check("stripHtml entities", stripHtml("Tom &amp; Jerry &lt;3&nbsp;&quot;x&quot; &#39;y&#39; &#8212; &#x41;"), "Tom & Jerry <3 \"x\" 'y' — A");
+check("stripHtml decodes &amp; last", stripHtml("&amp;lt;script&amp;gt;"), "&lt;script&gt;");
+check("stripHtml collapses blank lines", stripHtml("a<br><br><br><br>b"), "a\n\nb");
+
+// --- normaliseEvent ------------------------------------------------------------
+
+const calendar = makeCalendar();
+
+const fullRaw: RawEvent = {
+	id: "evt1",
+	status: "confirmed",
+	htmlLink: "https://www.google.com/calendar/event?eid=abc",
+	summary: "  Design review  ",
+	description: "<b>Agenda</b><br>specs &amp; plans",
+	location: " Room 4 ",
+	start: { dateTime: "2026-08-14T09:30:00+01:00", timeZone: "Europe/London" },
+	end: { dateTime: "2026-08-14T10:00:00+01:00", timeZone: "Europe/London" },
+	recurringEventId: "series1",
+	organizer: { email: "sam@example.com", displayName: "Sam" },
+	attendees: [
+		{ email: "sam@example.com", displayName: "Sam", organizer: true, responseStatus: "accepted" },
+		{ email: "alex@example.com", self: true, responseStatus: "tentative", optional: true },
+		{ email: "room@resource.calendar.google.com", resource: true, responseStatus: "accepted" },
+	],
+	conferenceData: { entryPoints: [{ entryPointType: "phone", uri: "tel:+1" }, { entryPointType: "video", uri: "https://meet.google.com/abc" }] },
+};
+{
+	const event = normaliseEvent(fullRaw, calendar);
+	check("normalise returns an event", event !== null, true);
+	if (event) {
+		check("normalise identity", [event.id, event.calendarKey, event.calendarId, event.accountId, event.accountLabel], [
+			"evt1",
+			calendar.key,
+			calendar.id,
+			calendar.accountId,
+			calendar.accountLabel,
+		]);
+		check("normalise title trimmed", event.title, "Design review");
+		check("normalise location trimmed", event.location, "Room 4");
+		check("normalise HTML description", event.description, "Agenda\nspecs & plans");
+		check("normalise times", [event.allDay, event.start.toISOString(), event.end.toISOString()], [
+			false,
+			"2026-08-14T08:30:00.000Z",
+			"2026-08-14T09:00:00.000Z",
+		]);
+		check("normalise meet url from conference data", event.meetUrl, "https://meet.google.com/abc");
+		check("normalise link", event.link, "https://www.google.com/calendar/event?eid=abc");
+		check("normalise organizer", event.organizer, "Sam");
+		check("normalise attendees", event.attendees, [
+			{ email: "sam@example.com", name: "Sam", response: "accepted", self: false, organizer: true, optional: false, resource: false },
+			{ email: "alex@example.com", response: "tentative", self: true, organizer: false, optional: true, resource: false },
+			{ email: "room@resource.calendar.google.com", response: "accepted", self: false, organizer: false, optional: false, resource: true },
+		]);
+		check("normalise selfResponse", event.selfResponse, "tentative");
+		check("normalise recurring", event.recurring, true);
+		check("normalise status", event.status, "confirmed");
+	}
+}
+{
+	const event = normaliseEvent(
+		{
+			id: "allday",
+			summary: "Holiday",
+			description: "Plain a < b > c",
+			start: { date: "2026-08-14" },
+			end: { date: "2026-08-17" },
+			organizer: { email: calendar.id },
+			hangoutLink: "https://meet.google.com/xyz",
+		},
+		calendar
+	);
+	check("all-day parsed", event?.allDay, true);
+	check("all-day start", event?.start.format("YYYY-MM-DD HH:mm"), "2026-08-14 00:00");
+	check("all-day end is inclusive", event?.end.format("YYYY-MM-DD HH:mm"), "2026-08-16 23:59");
+	check("plain description kept verbatim", event?.description, "Plain a < b > c");
+	check("defaults", [event?.attendees, event?.recurring], [[], false]);
+	check("hangoutLink wins", event?.meetUrl, "https://meet.google.com/xyz");
+}
+{
+	const single = normaliseEvent({ id: "one", start: { date: "2026-08-14" }, end: { date: "2026-08-15" } }, calendar);
+	check("one-day all-day event ends the same day", single?.end.format("YYYY-MM-DD"), "2026-08-14");
+	check("empty title", single?.title, "(no title)");
+	check("recurrence on a master counts as recurring", normaliseEvent({ ...fullRaw, recurringEventId: undefined, recurrence: ["RRULE:FREQ=DAILY"] }, calendar)?.recurring, true);
+}
+check("no id → null", normaliseEvent({ ...fullRaw, id: undefined }, calendar), null);
+check("no start → null", normaliseEvent({ ...fullRaw, start: undefined }, calendar), null);
+check("start without a value → null", normaliseEvent({ ...fullRaw, start: {} }, calendar), null);
+check("timed start, missing end time → null", normaliseEvent({ ...fullRaw, end: { date: "2026-08-14" } }, calendar), null);
+check("invalid date → null", normaliseEvent({ id: "x", start: { date: "2026-13-45" }, end: { date: "2026-13-46" } }, calendar), null);
+check("invalid dateTime → null", normaliseEvent({ id: "x", start: { dateTime: "nope" }, end: { dateTime: "nope" } }, calendar), null);
 
 // --- describeError ---------------------------------------------------------------
 
@@ -84,6 +181,24 @@ serial(async () => {
 			["alex@example.com::team@group.calendar.google.com", "Team", "", false, undefined],
 		]);
 		check("listCalendars paged", seen.length, 2);
+
+		// listEvents: query params, encoded path, normalisation, skips id-less items.
+		seen.length = 0;
+		api = () => json(200, { items: [fullRaw, { summary: "no id", start: { date: "2026-08-14" }, end: { date: "2026-08-15" } }] });
+		const cal = makeCalendar({ id: "team#x@group.calendar.google.com" });
+		const events = await client.listEvents(
+			{ calendarId: cal.id, timeMin: moment("2026-08-14T00:00:00Z"), timeMax: moment("2026-08-15T00:00:00Z"), search: "review" },
+			cal
+		);
+		const listUrl = new URL(seen[0].url);
+		check("listEvents path encodes the calendar id", listUrl.pathname, "/calendar/v3/calendars/team%23x%40group.calendar.google.com/events");
+		check("listEvents params", [listUrl.searchParams.get("singleEvents"), listUrl.searchParams.get("orderBy"), listUrl.searchParams.get("q"), listUrl.searchParams.get("timeMin")], [
+			"true",
+			"startTime",
+			"review",
+			"2026-08-14T00:00:00.000Z",
+		]);
+		check("listEvents normalises and skips id-less events", events.map((e) => e.id), ["evt1"]);
 
 		// Network failure → CalendarApiError network; reauth passes through.
 		api = () => {

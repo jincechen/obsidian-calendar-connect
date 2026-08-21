@@ -1,11 +1,17 @@
 import { Notice, Plugin } from "obsidian";
 import { AuthError, GoogleAuth, ReauthRequiredError, revoke, type ClientConfig } from "./auth";
+import { CalendarBlock } from "./block";
 import { GoogleCalendarClient, describeError } from "./google";
+import type { BlockQuery } from "./query";
 import { sanitiseSettings, type AccountSettings, type CalendarConnectSettings } from "./settings";
 import { CalendarConnectSettingTab } from "./settings-tab";
+import { EventStore, finishEvents, selectCalendars } from "./store";
 import { DeviceTokenStore, type StoredGrant } from "./tokens";
-import type { CalendarInfo } from "./types";
+import type { CalEvent, CalendarInfo } from "./types";
 import { authorize } from "./ui/consent-modal";
+
+// Deliberately specific: `calendar` alone would collide with other plugins.
+export const BLOCK_LANGUAGE = "calendar-connect";
 
 /** How long a calendar list is reused, and how soon a list with failures is retried. */
 const CALENDAR_LIST_TTL_MS = 60 * 60 * 1000;
@@ -29,12 +35,26 @@ export interface CalendarList {
 	errors: string[];
 }
 
+export interface QueryResult {
+	events: CalEvent[];
+	warnings: string[];
+	/** Calendars the result was drawn from, for a targeted refresh. */
+	calendarKeys: string[];
+	/** Epoch ms of the oldest response used, or null when nothing was fetched. */
+	fetchedAt: number | null;
+}
+
 export function reconnectWarning(label: string): string {
 	return `${label}: needs reconnecting — open settings`;
 }
 
+export function notSignedInWarning(label: string): string {
+	return `${label}: not signed in on this device — open settings`;
+}
+
 export default class CalendarConnectPlugin extends Plugin {
 	settings: CalendarConnectSettings = sanitiseSettings(undefined);
+	readonly store = new EventStore();
 
 	private tokens!: DeviceTokenStore;
 	/** Grants read from this device's keychain. Only accounts in here are signed in. */
@@ -42,6 +62,7 @@ export default class CalendarConnectPlugin extends Plugin {
 	private readonly runtimes = new Map<string, AccountRuntime>();
 	/** Accounts whose refresh token Google rejected this session. In memory only. */
 	private readonly needsReconnect = new Set<string>();
+	private readonly blocks = new Set<CalendarBlock>();
 	private calendarsPromise: Promise<CalendarList> | null = null;
 	private calendarsFetchedAt = 0;
 	private connecting = false;
@@ -52,17 +73,41 @@ export default class CalendarConnectPlugin extends Plugin {
 		await this.loadSettings();
 		this.syncRuntimes();
 
+		this.registerMarkdownCodeBlockProcessor(BLOCK_LANGUAGE, (source, el, ctx) => {
+			ctx.addChild(new CalendarBlock(el, source, this));
+		});
+
 		this.settingTab = new CalendarConnectSettingTab(this);
 		this.addSettingTab(this.settingTab);
+
+		this.addCommand({
+			id: "refresh",
+			name: "Refresh calendar data",
+			callback: () => {
+				this.invalidateAll();
+				this.refreshAllBlocks();
+				new Notice("Google Calendar refreshed");
+			},
+		});
 
 		this.addCommand({
 			id: "add-account",
 			name: "Add a Google account",
 			callback: () => void this.connectAccount(),
 		});
+
+		this.addCommand({
+			id: "insert-block",
+			name: "Insert calendar block",
+			editorCallback: (editor) => {
+				editor.replaceSelection(`\`\`\`${BLOCK_LANGUAGE}\nfrom: today\nperiod: 1d\n\`\`\`\n`);
+			},
+		});
 	}
 
 	onunload(): void {
+		this.store.invalidateAll();
+		this.blocks.clear();
 		this.runtimes.clear();
 		this.grants.clear();
 		this.needsReconnect.clear();
@@ -92,6 +137,8 @@ export default class CalendarConnectPlugin extends Plugin {
 		this.settings = sanitiseSettings(await this.loadData());
 		this.syncRuntimes();
 		this.calendarsPromise = null;
+		this.store.invalidateAll();
+		this.refreshAllBlocks();
 		this.updateSettingTab();
 	}
 
@@ -186,6 +233,19 @@ export default class CalendarConnectPlugin extends Plugin {
 
 	needsReconnecting(id: string): boolean {
 		return this.needsReconnect.has(id);
+	}
+
+	clientFor(id: string): GoogleCalendarClient | null {
+		return this.grants.has(id) ? this.runtimes.get(id)?.client ?? null : null;
+	}
+
+	/** The account a "Reconnect" button should act on. */
+	reconnectTarget(): AccountSettings | undefined {
+		return (
+			this.settings.accounts.find((account) => this.needsReconnect.has(account.id)) ??
+			this.settings.accounts.find((account) => !this.grants.has(account.id)) ??
+			this.settings.accounts[0]
+		);
 	}
 
 	private markReauth(id: string, error: unknown): void {
@@ -285,6 +345,7 @@ export default class CalendarConnectPlugin extends Plugin {
 
 			this.invalidateAll();
 			await this.getCalendars().catch(() => undefined);
+			this.refreshAllBlocks();
 			this.updateSettingTab();
 			return true;
 		} catch (error) {
@@ -309,10 +370,11 @@ export default class CalendarConnectPlugin extends Plugin {
 		this.dropAccount(id);
 		await this.saveSettings();
 		this.invalidateAll();
+		this.refreshAllBlocks();
 		this.updateSettingTab();
 	}
 
-	/** Removes an account record, its calendars, and this device's sign-in for it. */
+	/** Removes an account record, its calendars and selections, and this device's sign-in for it. */
 	private dropAccount(id: string): void {
 		this.settings.accounts = this.settings.accounts.filter((entry) => entry.id !== id);
 		this.purgeAccountData(id);
@@ -325,9 +387,11 @@ export default class CalendarConnectPlugin extends Plugin {
 		this.needsReconnect.delete(id);
 	}
 
-	/** Drops the cached calendars belonging to an account. */
+	/** Drops cached calendars and default selections belonging to an account. */
 	private purgeAccountData(id: string): void {
 		this.settings.knownCalendars = this.settings.knownCalendars.filter((calendar) => calendar.accountId !== id);
+		const remaining = new Set(this.settings.knownCalendars.map((calendar) => calendar.key));
+		this.settings.defaultCalendars = this.settings.defaultCalendars.filter((key) => remaining.has(key));
 	}
 
 	async renameAccount(id: string, label: string): Promise<void> {
@@ -338,17 +402,35 @@ export default class CalendarConnectPlugin extends Plugin {
 			if (calendar.accountId === id) calendar.accountLabel = label;
 		}
 		await this.saveSettings();
+		// Cached events carry the old label.
+		this.store.invalidateAll();
+		this.refreshAllBlocks();
+	}
+
+	// --- Blocks -----------------------------------------------------------
+
+	registerBlock(block: CalendarBlock): void {
+		this.blocks.add(block);
+	}
+
+	unregisterBlock(block: CalendarBlock): void {
+		this.blocks.delete(block);
+	}
+
+	refreshAllBlocks(): void {
+		for (const block of this.blocks) void block.render();
+	}
+
+	invalidateAll(): void {
+		this.store.invalidateAll();
+		this.calendarsPromise = null;
 	}
 
 	// --- Data -------------------------------------------------------------
 
-	invalidateAll(): void {
-		this.calendarsPromise = null;
-	}
-
 	/**
 	 * Calendar lists for every account signed in here. One account failing does
-	 * not take down the others — its error is returned alongside them.
+	 * not take down the others — its error is returned for the block to surface.
 	 */
 	getCalendars(): Promise<CalendarList> {
 		const age = Date.now() - this.calendarsFetchedAt;
@@ -370,6 +452,11 @@ export default class CalendarConnectPlugin extends Plugin {
 			);
 		}
 		return this.calendarsPromise;
+	}
+
+	async reloadCalendars(): Promise<CalendarList> {
+		this.calendarsPromise = null;
+		return this.getCalendars();
 	}
 
 	private async fetchAllCalendars(): Promise<CalendarList> {
@@ -409,10 +496,100 @@ export default class CalendarConnectPlugin extends Plugin {
 		// Saving only on change keeps data.json still, so sync does not churn.
 		if (JSON.stringify(next) !== JSON.stringify(this.settings.knownCalendars)) {
 			this.settings.knownCalendars = next;
+			const keys = new Set(next.map((calendar) => calendar.key));
+			this.settings.defaultCalendars = this.settings.defaultCalendars.filter((key) => keys.has(key));
 			await this.saveSettings();
 			this.updateSettingTab();
 		}
 
 		return { calendars: this.settings.knownCalendars, errors };
 	}
+
+	/**
+	 * Resolves a block's calendars, fetches each through the cache (`maxAgeMs`
+	 * old at most) and returns filtered, ordered events. Calendars of accounts
+	 * this device cannot use become warnings; only a total failure throws.
+	 */
+	async runQuery(query: BlockQuery, maxAgeMs: number): Promise<QueryResult> {
+		const { calendars: available, errors } = await this.getCalendars();
+		const warnings = [...errors];
+
+		const selection = selectCalendars(query, available);
+		warnings.push(...selection.warnings);
+		if (selection.selected.length === 0) {
+			warnings.push("No calendars selected — check the `calendars` option or the plugin settings.");
+			return { events: [], warnings: unique(warnings), calendarKeys: [], fetchedAt: null };
+		}
+
+		const fetchable: CalendarInfo[] = [];
+		const reconnect: AccountSettings[] = [];
+		for (const calendar of selection.selected) {
+			const account = this.account(calendar.accountId);
+			if (!account) continue;
+			if (!this.grants.has(account.id)) warnings.push(notSignedInWarning(account.label));
+			else if (this.needsReconnect.has(account.id)) {
+				warnings.push(reconnectWarning(account.label));
+				if (!reconnect.includes(account)) reconnect.push(account);
+			} else fetchable.push(calendar);
+		}
+
+		if (fetchable.length === 0) {
+			if (reconnect.length) throw new ReauthRequiredError(`${reconnect[0].label} needs reconnecting`);
+			return { events: [], warnings: unique(warnings), calendarKeys: [], fetchedAt: null };
+		}
+
+		const settled = await Promise.allSettled(
+			fetchable.map((calendar) =>
+				this.store.fetch(
+					calendar,
+					query.from,
+					query.to,
+					query.search,
+					() => {
+						const client = this.clientFor(calendar.accountId);
+						if (!client) return Promise.reject(new Error(`${calendar.accountLabel} is not signed in on this device`));
+						return client.listEvents(
+							{ calendarId: calendar.id, timeMin: query.from, timeMax: query.to, search: query.search },
+							calendar
+						);
+					},
+					maxAgeMs
+				)
+			)
+		);
+
+		const events: CalEvent[] = [];
+		let fetchedAt: number | null = null;
+		settled.forEach((outcome, index) => {
+			const calendar = fetchable[index];
+			if (outcome.status === "fulfilled") {
+				events.push(...outcome.value.events);
+				fetchedAt = fetchedAt === null ? outcome.value.fetchedAt : Math.min(fetchedAt, outcome.value.fetchedAt);
+				return;
+			}
+			this.markReauth(calendar.accountId, outcome.reason);
+			warnings.push(
+				outcome.reason instanceof ReauthRequiredError
+					? reconnectWarning(calendar.accountLabel)
+					: `${calendar.name}: ${describeError(outcome.reason)}`
+			);
+		});
+
+		// Every calendar failing is an error, not a quietly empty agenda.
+		const firstFailure = settled.find((outcome) => outcome.status === "rejected");
+		if (settled.every((outcome) => outcome.status === "rejected") && firstFailure?.status === "rejected") {
+			throw firstFailure.reason;
+		}
+
+		return {
+			events: finishEvents(events, query),
+			warnings: unique(warnings),
+			calendarKeys: fetchable.map((calendar) => calendar.key),
+			fetchedAt,
+		};
+	}
+}
+
+function unique(items: string[]): string[] {
+	return [...new Set(items)];
 }

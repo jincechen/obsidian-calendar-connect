@@ -41,3 +41,27 @@ export function openExternal(value: unknown): boolean {
 	window.open(url, "_blank", "noopener");
 	return true;
 }
+
+/** A Google Maps search for a free-text location. Always https. */
+export function mapsUrl(location: string): string {
+	return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`;
+}
+
+/**
+ * Event text made inert for pasting into a note: one line, with Markdown and
+ * HTML syntax escaped, so a stranger's title cannot become an image, link,
+ * code block or embed once it lands in the vault.
+ */
+export function markdownInline(text: string): string {
+	return text
+		.replace(/\s+/g, " ")
+		.trim()
+		.replace(/[\\`*_[\]<>!|#~=$%{}()^]/g, "\\$&");
+}
+
+export function truncate(text: string, max: number): string {
+	// A length of zero means show none of it — the opposite of "no limit".
+	if (max <= 0) return "";
+	if (text.length <= max) return text;
+	return `${text.slice(0, max).trimEnd()}…`;
+}

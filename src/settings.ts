@@ -1,4 +1,4 @@
-import type { CalendarInfo } from "./types";
+import type { CalendarInfo, ViewMode } from "./types";
 
 /**
  * One connected Google account as the vault knows it. Deliberately holds no
@@ -24,6 +24,21 @@ export interface CalendarConnectSettings {
 
 	/** Cached from the API so the settings tab can render instantly. */
 	knownCalendars: CalendarInfo[];
+	/** Calendar keys (`accountId::calendarId`) queried when a block names none. Empty = all. */
+	defaultCalendars: string[];
+
+	defaultView: ViewMode;
+	defaultPeriod: string;
+	use24HourTime: boolean;
+	dateHeadingFormat: string;
+	tableDateFormat: string;
+	hideDeclined: boolean;
+	descriptionLength: number;
+
+	/** Seconds an API response stays reusable. */
+	cacheTtl: number;
+	/** Seconds between automatic block refreshes. 0 disables; otherwise at least 60. */
+	autoRefresh: number;
 }
 
 export const DEFAULT_SETTINGS: CalendarConnectSettings = {
@@ -33,7 +48,22 @@ export const DEFAULT_SETTINGS: CalendarConnectSettings = {
 	accounts: [],
 
 	knownCalendars: [],
+	defaultCalendars: [],
+
+	defaultView: "agenda",
+	defaultPeriod: "1d",
+	use24HourTime: true,
+	dateHeadingFormat: "dddd D MMMM",
+	tableDateFormat: "ddd D MMM",
+	hideDeclined: true,
+	descriptionLength: 200,
+
+	cacheTtl: 300,
+	autoRefresh: 0,
 };
+
+/** Shortest auto-refresh interval, so a stray value cannot hammer the API. */
+export const MIN_AUTO_REFRESH = 60;
 
 export const CALENDAR_KEY_SEPARATOR = "::";
 
@@ -41,7 +71,8 @@ export function calendarKey(accountId: string, calendarId: string): string {
 	return `${accountId}${CALENDAR_KEY_SEPARATOR}${calendarId}`;
 }
 
-/** Prefix for the settings-tab control keys of account rows. */
+/** Prefixes for the settings-tab control keys of repeated rows. */
+export const CALENDAR_KEY_PREFIX = "calendar:";
 export const ACCOUNT_KEY_PREFIX = "account:";
 
 // --- Sanitising -----------------------------------------------------------
@@ -70,6 +101,14 @@ function num(value: unknown, fallback: number, min: number, max: number): number
 	const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
 	if (!Number.isFinite(n)) return fallback;
 	return Math.min(max, Math.max(min, Math.round(n)));
+}
+
+function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
+	return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+function strings(value: unknown): string[] {
+	return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") : [];
 }
 
 function sanitiseAccount(value: unknown): AccountSettings | null {
@@ -122,6 +161,8 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 		}
 	}
 
+	const autoRefresh = num(data.autoRefresh, d.autoRefresh, 0, 24 * 3600);
+
 	return {
 		clientId: str(data.clientId, d.clientId).trim(),
 		clientSecret: str(data.clientSecret, d.clientSecret).trim(),
@@ -129,5 +170,17 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 		accounts,
 
 		knownCalendars,
+		defaultCalendars: strings(data.defaultCalendars),
+
+		defaultView: oneOf(data.defaultView, ["agenda", "table"] as const, d.defaultView),
+		defaultPeriod: str(data.defaultPeriod, d.defaultPeriod).trim() || d.defaultPeriod,
+		use24HourTime: bool(data.use24HourTime, d.use24HourTime),
+		dateHeadingFormat: str(data.dateHeadingFormat, d.dateHeadingFormat) || d.dateHeadingFormat,
+		tableDateFormat: str(data.tableDateFormat, d.tableDateFormat) || d.tableDateFormat,
+		hideDeclined: bool(data.hideDeclined, d.hideDeclined),
+		descriptionLength: num(data.descriptionLength, d.descriptionLength, 0, 10000),
+
+		cacheTtl: num(data.cacheTtl, d.cacheTtl, 0, 24 * 3600),
+		autoRefresh: autoRefresh === 0 ? 0 : Math.max(MIN_AUTO_REFRESH, autoRefresh),
 	};
 }

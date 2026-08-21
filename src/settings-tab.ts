@@ -9,11 +9,22 @@ import {
 	type SettingDefinitionPage,
 } from "obsidian";
 import { SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY } from "./auth";
+import { describeError } from "./google";
 import type CalendarConnectPlugin from "./main";
+import { isValidPeriod } from "./query";
 import { openExternal } from "./safety";
-import { ACCOUNT_KEY_PREFIX, type AccountSettings } from "./settings";
+import {
+	ACCOUNT_KEY_PREFIX,
+	CALENDAR_KEY_PREFIX,
+	DEFAULT_SETTINGS,
+	MIN_AUTO_REFRESH,
+	type AccountSettings,
+} from "./settings";
 
 const CONSOLE_URL = "https://console.cloud.google.com/apis/credentials";
+
+/** Settings that only affect the OAuth client; changing them rebuilds runtimes rather than redrawing blocks. */
+const CLIENT_KEYS = new Set(["clientId", "clientSecret", "oauthPort"]);
 
 /**
  * Settings are declared rather than rendered, which is what puts them in
@@ -21,7 +32,8 @@ const CONSOLE_URL = "https://console.cloud.google.com/apis/credentials";
  * describes the shape and bridges control keys to `CalendarConnectSettings`.
  *
  * Keys are either a plain field name on the settings object, or a prefixed
- * composite for the account rows: `account:<accountId>:<field>`.
+ * composite for the repeated rows: `calendar:<calendarKey>` and
+ * `account:<accountId>:<field>`.
  */
 export class CalendarConnectSettingTab extends PluginSettingTab {
 	constructor(private readonly plugin: CalendarConnectPlugin) {
@@ -39,6 +51,12 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 	}
 
 	getControlValue(key: string): unknown {
+		const settings = this.plugin.settings;
+
+		if (key.startsWith(CALENDAR_KEY_PREFIX)) {
+			return settings.defaultCalendars.includes(key.slice(CALENDAR_KEY_PREFIX.length));
+		}
+
 		const account = CalendarConnectSettingTab.split(key, ACCOUNT_KEY_PREFIX);
 		if (account) {
 			const entry = this.plugin.account(account.id);
@@ -48,22 +66,34 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 			return "";
 		}
 
-		return (this.plugin.settings as unknown as Record<string, unknown>)[key];
+		return (settings as unknown as Record<string, unknown>)[key];
 	}
 
 	async setControlValue(key: string, value: unknown): Promise<void> {
-		const account = CalendarConnectSettingTab.split(key, ACCOUNT_KEY_PREFIX);
-		if (account) {
-			await this.setAccountField(account.id, account.field, String(value ?? "").trim());
-			return;
+		const settings = this.plugin.settings;
+
+		if (key.startsWith(CALENDAR_KEY_PREFIX)) {
+			const calendarKey = key.slice(CALENDAR_KEY_PREFIX.length);
+			const selected = new Set(settings.defaultCalendars);
+			if (value) selected.add(calendarKey);
+			else selected.delete(calendarKey);
+			settings.defaultCalendars = [...selected];
+		} else {
+			const account = CalendarConnectSettingTab.split(key, ACCOUNT_KEY_PREFIX);
+			if (account) {
+				await this.setAccountField(account.id, account.field, String(value ?? "").trim());
+				return;
+			}
+			(settings as unknown as Record<string, unknown>)[key] = value;
 		}
-		(this.plugin.settings as unknown as Record<string, unknown>)[key] = value;
 
 		// Every write goes back through the sanitiser, so a control can never store a
-		// value (NaN, an out-of-range port) the plugin would not load.
+		// value (NaN, an unknown enum, a 5-second refresh) the plugin would not load.
 		this.plugin.sanitiseInPlace();
 		await this.plugin.saveSettings();
-		this.plugin.syncRuntimes();
+
+		if (CLIENT_KEYS.has(key)) this.plugin.syncRuntimes();
+		else this.plugin.refreshAllBlocks();
 	}
 
 	private async setAccountField(id: string, field: string, text: string): Promise<void> {
@@ -84,7 +114,13 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 	// --- Definitions ------------------------------------------------------
 
 	getSettingDefinitions(): SettingDefinitionItem[] {
-		return [this.clientGroup(), this.accountsList()];
+		return [
+			this.clientGroup(),
+			this.accountsList(),
+			this.calendarsGroup(),
+			this.displayGroup(),
+			this.syncGroup(),
+		];
 	}
 
 	/** A masked text row; there is no password control type. */
@@ -209,7 +245,7 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 					items: [
 						{
 							name: "Label",
-							desc: "Shown in place of the address.",
+							desc: "What `accounts:` and `account/calendar` match against in a block.",
 							control: { type: "text", key: `${ACCOUNT_KEY_PREFIX}${id}:label` },
 						},
 						{
@@ -238,6 +274,142 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 					],
 				};
 			}),
+		};
+	}
+
+	private calendarsGroup(): SettingDefinitionGroup {
+		const calendars = this.plugin.settings.knownCalendars;
+		const hasAccounts = this.plugin.connectedAccounts().length > 0;
+
+		const toggles: SettingDefinition[] = calendars.length
+			? calendars.map((calendar) => ({
+					name: calendar.name,
+					desc: `${calendar.accountLabel} · ${calendar.id}`,
+					aliases: [calendar.accountLabel, calendar.id],
+					control: { type: "toggle" as const, key: `${CALENDAR_KEY_PREFIX}${calendar.key}` },
+				}))
+			: [
+					{
+						name: "No calendars loaded",
+						desc: hasAccounts ? "Use the reload button on this section." : "Add an account first.",
+						searchable: false,
+					},
+				];
+
+		return {
+			type: "group",
+			heading: "Calendars",
+			search:
+				calendars.length > 8
+					? {
+							placeholder: "Filter calendars",
+							match: (def, query) =>
+								`${def.name} ${typeof def.desc === "string" ? def.desc : ""}`
+									.toLowerCase()
+									.includes(query.toLowerCase()),
+						}
+					: undefined,
+			extraButtons: [
+				(button) =>
+					button
+						.setIcon("refresh-cw")
+						.setTooltip("Reload the calendar list from Google")
+						.setDisabled(!hasAccounts)
+						.onClick(() => {
+							void this.plugin.reloadCalendars().then(
+								({ errors }) => {
+									new Notice(errors.length ? `Updated with errors: ${errors.join("; ")}` : "Calendar list updated");
+									this.update();
+								},
+								(error: unknown) => new Notice(`Google Calendar: ${describeError(error)}`, 10000)
+							);
+						}),
+			],
+			items: [
+				{
+					name: "Default calendars",
+					desc: "Calendars a block shows when it names none. Leave all off to show every calendar.",
+					searchable: false,
+				},
+				...toggles,
+			],
+		};
+	}
+
+	private displayGroup(): SettingDefinitionGroup {
+		return {
+			type: "group",
+			heading: "Display",
+			items: [
+				{
+					name: "View",
+					desc: "Used when a block omits `view`.",
+					control: {
+						type: "dropdown",
+						key: "defaultView",
+						options: { agenda: "Agenda", table: "Table" },
+					},
+				},
+				{
+					name: "Period",
+					desc: "How far ahead a block looks when it sets neither `to` nor `period`. For example 1d, 7d, 2w, 1m or eom.",
+					control: {
+						type: "text",
+						key: "defaultPeriod",
+						placeholder: DEFAULT_SETTINGS.defaultPeriod,
+						// A typo here would break every block relying on the default, with
+						// an error naming an option the user never wrote.
+						validate: (value: string) =>
+							isValidPeriod(value) ? undefined : `"${value}" is not a period. Try 1d, 7d, 2w, 1m or eom.`,
+					},
+				},
+				{ name: "24-hour time", control: { type: "toggle", key: "use24HourTime" } },
+				{
+					name: "Date heading format",
+					desc: "Moment format for day headings. Today, Tomorrow and Yesterday are always named.",
+					control: { type: "text", key: "dateHeadingFormat", placeholder: DEFAULT_SETTINGS.dateHeadingFormat },
+				},
+				{
+					name: "Table date format",
+					desc: "Moment format for the `date` field.",
+					control: { type: "text", key: "tableDateFormat", placeholder: DEFAULT_SETTINGS.tableDateFormat },
+				},
+				{ name: "Hide declined events", control: { type: "toggle", key: "hideDeclined" } },
+				{
+					name: "Description length",
+					desc: "Characters of a description shown before it is cut off. 0 hides descriptions.",
+					control: { type: "number", key: "descriptionLength", min: 0, step: 10 },
+				},
+			],
+		};
+	}
+
+	private syncGroup(): SettingDefinitionGroup {
+		return {
+			type: "group",
+			heading: "Sync",
+			items: [
+				{
+					name: "Cache lifetime",
+					desc: "Seconds a response from Google is reused before asking again. 0 asks on every render.",
+					control: { type: "number", key: "cacheTtl", min: 0, step: 30 },
+				},
+				{
+					name: "Auto-refresh",
+					desc: "Seconds between automatic refreshes of open blocks. 0 disables it. Blocks override it with `refresh`. Refreshes pause while Obsidian is in the background.",
+					control: {
+						type: "number",
+						key: "autoRefresh",
+						min: 0,
+						step: 60,
+						// Mirrors the clamp in sanitiseSettings and parseQuery.
+						validate: (value: number) =>
+							value === 0 || value >= MIN_AUTO_REFRESH
+								? undefined
+								: `Use 0 to disable, or at least ${MIN_AUTO_REFRESH} seconds.`,
+					},
+				},
+			],
 		};
 	}
 }
