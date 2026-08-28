@@ -33,6 +33,8 @@ export interface CalendarConnectSettings {
 	dateHeadingFormat: string;
 	tableDateFormat: string;
 	hideDeclined: boolean;
+	/** Title patterns hidden in every block. Globs, or /regex/. */
+	hiddenTitles: string[];
 	descriptionLength: number;
 
 	/** Seconds an API response stays reusable. */
@@ -56,6 +58,7 @@ export const DEFAULT_SETTINGS: CalendarConnectSettings = {
 	dateHeadingFormat: "dddd D MMMM",
 	tableDateFormat: "ddd D MMM",
 	hideDeclined: true,
+	hiddenTitles: [],
 	descriptionLength: 200,
 
 	cacheTtl: 300,
@@ -178,6 +181,7 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 		dateHeadingFormat: str(data.dateHeadingFormat, d.dateHeadingFormat) || d.dateHeadingFormat,
 		tableDateFormat: str(data.tableDateFormat, d.tableDateFormat) || d.tableDateFormat,
 		hideDeclined: bool(data.hideDeclined, d.hideDeclined),
+		hiddenTitles: strings(data.hiddenTitles).map((line) => line.trim()).filter(Boolean),
 		descriptionLength: num(data.descriptionLength, d.descriptionLength, 0, 10000),
 
 		cacheTtl: num(data.cacheTtl, d.cacheTtl, 0, 24 * 3600),

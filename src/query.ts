@@ -16,6 +16,8 @@ export interface BlockQuery {
 	fields: Field[];
 	limit: number | null;
 	search?: string;
+	/** Compiled from the settings list plus the block's own `hide-titles`. */
+	hiddenTitles: RegExp[];
 	allDay: AllDayMode;
 	hideDeclined: boolean;
 	use24HourTime: boolean;
@@ -87,6 +89,8 @@ const KEY_ALIASES: Record<string, string> = {
 	accounts: "accounts",
 	account: "accounts",
 	search: "search",
+	hidetitles: "hidetitles",
+	excludetitles: "hidetitles",
 	allday: "allday",
 	declined: "declined",
 	show: "show",
@@ -174,6 +178,45 @@ export function isValidPeriod(text: string): boolean {
 	const trimmed = text.trim();
 	if (!trimmed) return false;
 	return Boolean(parseDuration(trimmed) ?? resolveDate(trimmed, "end"));
+}
+
+/**
+ * Compiles one hide pattern.
+ *
+ * `/foo/i` is a regular expression. Anything else is a glob: `*` matches any run
+ * of characters and `?` matches one, anchored at both ends and case-insensitive.
+ * So `EOD` hides only an event called exactly that, `Start of *` hides anything
+ * beginning that way, and `*EOD*` hides anything containing it.
+ */
+export function compileTitlePattern(pattern: string): RegExp | null {
+	const text = pattern.trim();
+	if (!text) return null;
+
+	const delimited = /^\/(.*)\/([gimsuy]*)$/.exec(text);
+	if (delimited) {
+		try {
+			// `g` is dropped: a global regex carries lastIndex between .test() calls.
+			return new RegExp(delimited[1], delimited[2].replace(/g/g, "") || "i");
+		} catch {
+			return null;
+		}
+	}
+
+	const escaped = text
+		.replace(/[.+^${}()|[\]\\]/g, "\\$&")
+		.replace(/\*/g, ".*")
+		.replace(/\?/g, ".");
+	return new RegExp(`^${escaped}$`, "i");
+}
+
+export function compileTitlePatterns(patterns: string[], onInvalid?: (pattern: string) => void): RegExp[] {
+	const compiled: RegExp[] = [];
+	for (const pattern of patterns) {
+		const regex = compileTitlePattern(pattern);
+		if (regex) compiled.push(regex);
+		else if (pattern.trim()) onInvalid?.(pattern);
+	}
+	return compiled;
 }
 
 function requireDate(value: unknown, key: string, edge: "start" | "end"): Moment {
@@ -276,6 +319,11 @@ export function parseQuery(source: string, settings: CalendarConnectSettings): P
 	const calendars = toList(get("calendars"));
 	const searchRaw = get("search");
 	const emptyRaw = get("empty");
+	// The block's list adds to the one in settings rather than replacing it.
+	const hiddenTitles = compileTitlePatterns(
+		[...settings.hiddenTitles, ...toList(get("hidetitles"))],
+		(pattern) => warnings.push(`Invalid hide pattern "${pattern}"`)
+	);
 
 	return {
 		warnings,
@@ -289,6 +337,7 @@ export function parseQuery(source: string, settings: CalendarConnectSettings): P
 			fields,
 			limit,
 			search: searchRaw === undefined || searchRaw === null ? undefined : String(searchRaw),
+			hiddenTitles,
 			allDay: has("allday") ? toEnum(get("allday"), ALL_DAY_MODES, "all-day") : "include",
 			hideDeclined: has("declined") ? !toBool(get("declined"), "declined") : settings.hideDeclined,
 			use24HourTime,

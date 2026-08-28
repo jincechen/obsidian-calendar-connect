@@ -53,6 +53,8 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 	getControlValue(key: string): unknown {
 		const settings = this.plugin.settings;
 
+		if (key === "hiddenTitles") return settings.hiddenTitles.join("\n");
+
 		if (key.startsWith(CALENDAR_KEY_PREFIX)) {
 			return settings.defaultCalendars.includes(key.slice(CALENDAR_KEY_PREFIX.length));
 		}
@@ -72,7 +74,12 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 	async setControlValue(key: string, value: unknown): Promise<void> {
 		const settings = this.plugin.settings;
 
-		if (key.startsWith(CALENDAR_KEY_PREFIX)) {
+		if (key === "hiddenTitles") {
+			settings.hiddenTitles = String(value ?? "")
+				.split("\n")
+				.map((line) => line.trim())
+				.filter(Boolean);
+		} else if (key.startsWith(CALENDAR_KEY_PREFIX)) {
 			const calendarKey = key.slice(CALENDAR_KEY_PREFIX.length);
 			const selected = new Set(settings.defaultCalendars);
 			if (value) selected.add(calendarKey);
@@ -375,6 +382,12 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 					control: { type: "text", key: "tableDateFormat", placeholder: DEFAULT_SETTINGS.tableDateFormat },
 				},
 				{ name: "Hide declined events", control: { type: "toggle", key: "hideDeclined" } },
+				{
+					name: "Hidden events",
+					desc: "One title pattern per line, hidden in every block. `EOD` matches that title exactly, `Start of *` a prefix, `*EOD*` anywhere, and `/regex/` is a regular expression. Blocks add more with `hide-titles`.",
+					aliases: ["filter", "exclude", "ignore", "mute"],
+					control: { type: "textarea", key: "hiddenTitles", placeholder: "EOD\nStart of *\n*lunch*" },
+				},
 				{
 					name: "Description length",
 					desc: "Characters of a description shown before it is cut off. 0 hides descriptions.",

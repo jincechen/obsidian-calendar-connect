@@ -12,7 +12,11 @@ export function keepEvent(event: CalEvent, query: BlockQuery): boolean {
 	if (query.hideDeclined && event.selfResponse === "declined") return false;
 	if (query.allDay === "exclude" && event.allDay) return false;
 	if (query.allDay === "only" && !event.allDay) return false;
-	return true;
+	return !query.hiddenTitles.some((pattern) => {
+		// A user-written /regex/g keeps state between calls; reset it so every event is judged alike.
+		pattern.lastIndex = 0;
+		return pattern.test(event.title);
+	});
 }
 
 /** All-day events sort above timed ones on the same day, then by start, then title. */

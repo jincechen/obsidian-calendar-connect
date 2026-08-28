@@ -1,4 +1,6 @@
 import {
+	compileTitlePattern,
+	compileTitlePatterns,
 	isValidPeriod,
 	parseQuery,
 	resolveAccounts,
@@ -86,8 +88,9 @@ check("declined: false hides them", parseQuery("declined: false", { ...base, hid
 check("allDay camelCase", parseQuery("allDay: exclude", base).query.allDay, "exclude");
 check("all_day snake case", parseQuery("all_day: exclude", base).query.allDay, "exclude");
 check("ALL-DAY upper case", parseQuery("ALL-DAY: only", base).query.allDay, "only");
+check("hideTitles camelCase", parseQuery("hideTitles: EOD", base).query.hiddenTitles.length, 1);
 check("time_format snake case", parseQuery("time_format: 12h", base).query.use24HourTime, false);
-check("normalised keys do not warn", parseQuery("allDay: exclude", base).warnings, []);
+check("normalised keys do not warn", parseQuery("allDay: exclude\nhide_titles: EOD", base).warnings, []);
 
 // ---- options ----
 check("controls: false", parseQuery("controls: false", base).query.controls, false);
@@ -185,6 +188,61 @@ check(
 	parseQuery("show: description", { ...base, descriptionLength: 0 }).query.descriptionLength,
 	0
 );
+
+// ---- hiding events by title pattern ----
+const hides = (pattern: string, title: string) => compileTitlePattern(pattern)?.test(title) ?? null;
+
+// A bare word is an exact match, not a substring.
+check("bare pattern matches exactly", hides("EOD", "EOD"), true);
+check("bare pattern is case-insensitive", hides("eod", "EOD"), true);
+check("bare pattern does not match a substring", hides("EOD", "Prep for EOD"), false);
+check("bare pattern does not match a prefix", hides("EOD", "EOD review"), false);
+check("multi-word exact", hides("Start of Day", "Start of Day"), true);
+
+// Globs.
+check("trailing star is a prefix", hides("Start of *", "Start of Day"), true);
+check("trailing star needs the prefix", hides("Start of *", "End of Day"), false);
+check("surrounding stars match anywhere", hides("*EOD*", "Prep for EOD tomorrow"), true);
+check("surrounding stars still match exact", hides("*EOD*", "EOD"), true);
+check("leading star is a suffix", hides("*Day", "Start of Day"), true);
+check("question mark matches one char", hides("Day ?", "Day 1"), true);
+check("question mark is not a run", hides("Day ?", "Day 12"), false);
+
+// Regex form.
+check("regex form", hides("/^(EOD|SOD)$/", "SOD"), true);
+check("regex is case-insensitive by default", hides("/eod/", "My EOD note"), true);
+check("regex honours explicit flags", hides("/^eod$/", "EOD"), true);
+check("invalid regex compiles to null", compileTitlePattern("/[unclosed/"), null);
+check("blank pattern is ignored", compileTitlePattern("   "), null);
+
+// A `g` flag would make .test() stateful across events.
+const global = compileTitlePattern("/EOD/g");
+check("g flag stripped", global?.flags.includes("g"), false);
+check("so repeated tests agree", [global?.test("EOD"), global?.test("EOD")], [true, true]);
+
+// Regex metacharacters in a glob are literal.
+check("dots are literal in globs", hides("a.b", "axb"), false);
+check("dots match themselves", hides("a.b", "a.b"), true);
+check("parens are literal", hides("Standup (daily)", "Standup (daily)"), true);
+check("plus is literal", hides("C++", "C++"), true);
+
+const invalid: string[] = [];
+check(
+	"compiles a list and reports only real failures",
+	compileTitlePatterns(["EOD", "  ", "/[bad/", "Start of *"], (p) => invalid.push(p)).length,
+	2
+);
+check("invalid reported", invalid, ["/[bad/"]);
+
+// Settings list and block list combine.
+const hidden = { ...base, hiddenTitles: ["EOD"] };
+check("settings patterns compile", parseQuery("", hidden).query.hiddenTitles.length, 1);
+check("block adds to settings", parseQuery("hide-titles: Start of *, Lunch", hidden).query.hiddenTitles.length, 3);
+check("block alone", parseQuery("hide-titles: EOD", base).query.hiddenTitles.length, 1);
+check("yaml list form", parseQuery("hide-titles:\n  - EOD\n  - Lunch", base).query.hiddenTitles.length, 2);
+check("exclude-titles alias", parseQuery("exclude-titles: EOD", base).query.hiddenTitles.length, 1);
+check("bad pattern warns", parseQuery("hide-titles: /[bad/", base).warnings, ['Invalid hide pattern "/[bad/"']);
+check("hide-titles is a known option", parseQuery("hide-titles: EOD", base).warnings, []);
 
 // ---- prototype keys never match a lookup table ----
 check(

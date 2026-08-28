@@ -21,6 +21,13 @@ check("all-day exclude", keepEvent(allDay, query({ allDay: "exclude" })), false)
 check("all-day exclude keeps timed", keepEvent(plain, query({ allDay: "exclude" })), true);
 check("all-day only drops timed", keepEvent(plain, query({ allDay: "only" })), false);
 check("all-day only keeps all-day", keepEvent(allDay, query({ allDay: "only" })), true);
+check("hidden title", keepEvent(makeEvent({ title: "EOD" }), query({ hiddenTitles: [/^eod$/i] })), false);
+const sticky = /review/gi;
+check(
+	"global regex judged alike every time",
+	[plain, plain, plain].map((event) => keepEvent(event, query({ hiddenTitles: [sticky] }))),
+	[false, false, false]
+);
 
 // ---- compareEvents ----
 const at = (title: string, start: string, extra: Partial<CalEvent> = {}) =>
