@@ -31,7 +31,7 @@ const messy = sanitiseSettings({
 	evil: "<script>",
 });
 check("client id trimmed", messy.clientId, "id.apps.googleusercontent.com");
-check("unknown view falls back", messy.defaultView, "agenda");
+check("unknown view falls back", messy.defaultView, "list");
 check("valid boolean kept", messy.hideDeclined, false);
 check("numeric string coerced", messy.cacheTtl, 120);
 check("negative clamped", messy.descriptionLength, 0);

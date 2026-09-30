@@ -72,6 +72,10 @@ function timeText(event: CalEvent, query: BlockQuery, part?: DayItem["part"]): s
 	return timeLabel(event, query.use24HourTime);
 }
 
+function guestCount(event: CalEvent): number {
+	return event.attendees.filter((attendee) => !attendee.resource && !attendee.self).length;
+}
+
 function attendeeSummary(event: CalEvent): string {
 	const guests = event.attendees.filter((attendee) => !attendee.resource && !attendee.self);
 	if (guests.length === 0) return "";
@@ -223,6 +227,117 @@ function dayHeader(parent: HTMLElement, cls: string, day: Moment, count: number,
 	header.createSpan({ cls: "cc-day-count", text: String(count) });
 }
 
+// --- List view ---------------------------------------------------------------
+
+function renderRow(list: HTMLElement, item: DayItem, query: BlockQuery, actions: BlockActions): void {
+	const { event, part } = item;
+	const row = list.createEl("li", { cls: "cc-row" });
+	setColor(row, event);
+	applyStateClasses(row, event);
+
+	if (query.fields.includes("time")) {
+		const time = row.createSpan({ cls: "cc-row-time" });
+		const single = !event.allDay && !part && !event.end.isSame(event.start);
+		if (single) {
+			// Split so a narrow block can drop the end time.
+			time.createSpan({ cls: "cc-row-time-start", text: formatTime(event.start, query.use24HourTime) });
+			time.createSpan({ cls: "cc-row-time-end", text: `–${formatTime(event.end, query.use24HourTime)}` });
+		} else {
+			time.setText(timeText(event, query, part));
+		}
+	}
+
+	const dot = row.createSpan({ cls: "cc-row-dot" });
+	dot.toggleClass("is-hollow", event.selfResponse === "needsAction" || event.selfResponse === "tentative");
+
+	const content = row.createDiv({ cls: "cc-row-content" });
+	const line = content.createDiv({ cls: "cc-row-line" });
+	line.createSpan({ cls: "cc-row-title", text: event.title || "(No title)" });
+
+	const chips: string[] = [];
+	for (const field of query.fields) {
+		switch (field) {
+			case "date":
+				chips.push(event.start.format(query.tableDateFormat));
+				break;
+			case "calendar":
+				chips.push(event.calendarName);
+				break;
+			case "account":
+				chips.push(event.accountLabel);
+				break;
+			case "duration":
+				// "all day" would only repeat the time column.
+				if (!event.allDay || event.end.diff(event.start, "hours", true) > 24) {
+					chips.push(formatDuration(event.start, event.end, event.allDay));
+				}
+				break;
+			case "attendees": {
+				const guests = guestCount(event);
+				if (guests > 0) chips.push(guests === 1 ? "1 guest" : `${guests} guests`);
+				break;
+			}
+			case "response":
+				if (event.selfResponse) chips.push(responseLabel(event.selfResponse) ?? event.selfResponse);
+				break;
+		}
+	}
+	if (chips.length > 0) {
+		const meta = line.createSpan({ cls: "cc-row-meta" });
+		for (const chip of chips) meta.createSpan({ cls: "cc-chip", text: chip });
+	}
+
+	const location = event.location?.trim();
+	const meet = safeExternalUrl(event.meetUrl);
+	const showLocation = Boolean(location) && query.fields.includes("location");
+	const showMeet = Boolean(meet) && query.fields.includes("link");
+	if (showLocation || showMeet || event.recurring) {
+		const icons = line.createSpan({ cls: "cc-row-icons" });
+		if (showMeet && meet) {
+			iconButton(icons, "cc-row-icon cc-row-meet", "video", "Join call", () => openExternal(meet));
+		}
+		if (showLocation && location) {
+			iconButton(icons, "cc-row-icon cc-row-location", "map-pin", location, () => openExternal(mapsUrl(location)));
+		}
+		if (event.recurring) {
+			const repeat = icons.createSpan({ cls: "cc-row-icon cc-row-recurring", attr: { "aria-label": "Recurring" } });
+			setIcon(repeat, "repeat");
+		}
+	}
+
+	if (query.fields.includes("description")) {
+		const description = oneLine(event.description, query.descriptionLength);
+		if (description) {
+			row.addClass("has-desc");
+			content.createDiv({ cls: "cc-row-desc", text: description });
+		}
+	}
+
+	iconButton(row, "cc-row-more", "more-horizontal", "More options", (button) =>
+		showEventMenu(event, query, button)
+	);
+
+	attachRowBehaviour(row, event, query, actions);
+}
+
+function renderList(container: HTMLElement, events: CalEvent[], query: BlockQuery, options: RenderOptions): boolean {
+	const buckets = bucketByDay(events, query.from, query.to);
+	if (buckets.length === 0) return false;
+
+	const multiDay = !query.from.isSame(query.to, "day");
+	const today = options.now.clone().startOf("day");
+
+	for (const bucket of buckets) {
+		const section = container.createDiv({ cls: "cc-day" });
+		section.toggleClass("is-today", bucket.day.isSame(today, "day"));
+		if (multiDay) dayHeader(section, "cc-day-header", bucket.day, bucket.items.length, query);
+
+		const list = section.createEl("ul", { cls: "cc-rows" });
+		for (const item of bucket.items) renderRow(list, item, query, options.actions);
+	}
+	return true;
+}
+
 // --- Agenda view -------------------------------------------------------------
 
 function renderMeta(parent: HTMLElement, field: Field, event: CalEvent, query: BlockQuery): void {
@@ -361,7 +476,7 @@ function renderFooter(container: HTMLElement, options: RenderOptions): void {
 	iconButton(footer, "cc-refresh", "refresh-cw", "Refresh events", () => options.actions.refresh());
 }
 
-const VIEW_CLASSES = ["cc-view-agenda", "cc-view-table"];
+const VIEW_CLASSES = ["cc-view-list", "cc-view-agenda", "cc-view-table"];
 
 export function renderEvents(container: HTMLElement, events: CalEvent[], query: BlockQuery, options: RenderOptions): void {
 	container.empty();
@@ -377,7 +492,11 @@ export function renderEvents(container: HTMLElement, events: CalEvent[], query: 
 
 	const drawn =
 		events.length > 0 &&
-		(query.view === "table" ? renderTable(container, events, query, options) : renderAgenda(container, events, query, options));
+		(query.view === "table"
+			? renderTable(container, events, query, options)
+			: query.view === "agenda"
+				? renderAgenda(container, events, query, options)
+				: renderList(container, events, query, options));
 	if (!drawn) container.createDiv({ cls: "cc-empty", text: query.emptyMessage });
 
 	if (query.controls) renderFooter(container, options);

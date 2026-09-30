@@ -3,7 +3,7 @@
 	"name": "Calendar Connect",
 	"version": "0.2.0",
 	"minAppVersion": "1.13.1",
-	"description": "Show Google Calendar events from a code block, as an agenda or a table.",
+	"description": "List Google Calendar events from a compact code block, like a Tasks query for your calendar.",
 	"author": "Jince Chen",
 	"isDesktopOnly": false
 }

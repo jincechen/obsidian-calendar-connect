@@ -38,7 +38,7 @@ export interface ParsedQuery {
 
 export class QueryError extends Error {}
 
-const VIEWS: ViewMode[] = ["agenda", "table"];
+const VIEWS: ViewMode[] = ["list", "agenda", "table"];
 const ALL_DAY_MODES: AllDayMode[] = ["include", "exclude", "only"];
 
 const FIELDS: Field[] = [
@@ -69,6 +69,7 @@ const FIELD_ALIASES: Record<string, Field> = {
 };
 
 export const DEFAULT_FIELDS: Record<ViewMode, Field[]> = {
+	list: ["time", "title", "location", "link"],
 	agenda: ["time", "title", "location", "link"],
 	table: ["date", "time", "title", "calendar", "location"],
 };

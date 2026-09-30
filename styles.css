@@ -38,6 +38,10 @@
    List view — one line per event
    =================================================================== */
 
+.cc-day + .cc-day {
+	margin-top: var(--size-4-3);
+}
+
 .cc-day-header {
 	display: flex;
 	align-items: center;
@@ -52,6 +56,7 @@
 	color: var(--text-normal);
 }
 
+.cc-day.is-today .cc-day-label,
 .cc-group.is-today .cc-day-label {
 	color: var(--text-accent);
 }
@@ -62,16 +67,160 @@
 	font-variant-numeric: tabular-nums;
 }
 
+.cc-block .cc-rows {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.cc-block .cc-row {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-height: 1.9em;
+	margin: 0;
+	padding: 2px var(--size-4-1);
+	border-radius: var(--radius-s);
+	color: var(--text-normal);
+	cursor: pointer;
+	list-style: none;
+	transition: background-color 100ms ease;
+}
+
+.cc-block .cc-row::marker {
+	content: none;
+}
+
+.cc-block .cc-row:hover {
+	background: var(--background-modifier-hover);
+}
+
+.cc-block .cc-row:focus-visible {
+	outline: 2px solid var(--interactive-accent);
+	outline-offset: -2px;
+}
+
+.cc-row.has-desc {
+	align-items: flex-start;
+}
+
+.cc-row-time {
+	flex: 0 0 auto;
+	width: var(--cc-time-width);
+	overflow: hidden;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.cc-row.has-desc .cc-row-time,
+.cc-row.has-desc .cc-row-dot {
+	margin-top: 0.35em;
+}
+
+.cc-row-dot {
+	flex: 0 0 auto;
+	width: 0.6em;
+	height: 0.6em;
+	border-radius: 50%;
+	background: var(--cc-color, var(--cc-color-fallback));
+}
+
+/* Your answer is pending or "maybe": an outline instead of a filled dot. */
+.cc-row-dot.is-hollow {
+	background: transparent;
+	box-shadow: inset 0 0 0 1.5px var(--cc-color, var(--cc-color-fallback));
+}
+
+.cc-row-content {
+	display: flex;
+	flex: 1 1 auto;
+	flex-direction: column;
+	min-width: 0;
+}
+
+.cc-row-line {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	min-width: 0;
+}
+
+.cc-row-title {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	font-size: var(--font-ui-small);
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.cc-row-meta {
+	display: flex;
+	flex: 0 100 auto;
+	gap: var(--size-2-2);
+	min-width: 0;
+	overflow: hidden;
+}
+
+.cc-chip {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow: hidden;
+	padding: 0 var(--size-4-1);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-s);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smallest);
+	line-height: 1.6;
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
+.cc-row-icons {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+}
+
+.cc-row-recurring {
+	--icon-size: var(--icon-xs);
+	display: inline-flex;
+	padding: var(--size-2-1);
+	color: var(--text-faint);
+}
+
+.cc-row-desc {
+	overflow: hidden;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+	text-overflow: ellipsis;
+}
+
 /* The ⋯ button stays out of the way until the row is pointed at or focused. */
 .cc-block .cc-row-more {
 	opacity: 0;
 	transition: opacity 100ms ease;
 }
 
+.cc-block .cc-row:hover .cc-row-more,
+.cc-block .cc-row:focus-within .cc-row-more,
 .cc-block .cc-event:hover .cc-row-more,
 .cc-block .cc-event:focus-within .cc-row-more,
 .cc-block .cc-row-more:focus-visible {
 	opacity: 1;
+}
+
+.cc-row.is-declined .cc-row-title {
+	color: var(--text-faint);
+	text-decoration: line-through;
+}
+
+.cc-row.is-tentative .cc-row-title {
+	font-style: italic;
 }
 
 /* ===================================================================
@@ -406,6 +555,16 @@
 	.cc-block.cc-12h > * {
 		--cc-time-width: 4.8em;
 	}
+
+	.cc-row-time-end,
+	.cc-row-meta {
+		display: none;
+	}
+}
+
+/* Touch: bigger rows and targets, and the ⋯ button always shown (no hover to reveal it). */
+.is-mobile .cc-block .cc-row {
+	min-height: 44px;
 }
 
 .is-mobile .cc-block .clickable-icon {

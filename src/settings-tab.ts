@@ -354,7 +354,7 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 					control: {
 						type: "dropdown",
 						key: "defaultView",
-						options: { agenda: "Agenda", table: "Table" },
+						options: { list: "List (compact)", agenda: "Agenda", table: "Table" },
 					},
 				},
 				{

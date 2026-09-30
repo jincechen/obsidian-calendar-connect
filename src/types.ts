@@ -1,6 +1,6 @@
 import type { Moment } from "./moment-shim";
 
-export type ViewMode = "agenda" | "table";
+export type ViewMode = "list" | "agenda" | "table";
 
 export type AllDayMode = "include" | "exclude" | "only";
 

@@ -19,8 +19,8 @@ const fmt = (m: ReturnType<typeof moment> | null) => (m ? m.format("YYYY-MM-DD H
 const base = { ...DEFAULT_SETTINGS };
 
 const plain = parseQuery("", base);
-check("default view is agenda", plain.query.view, "agenda");
-check("default agenda fields", plain.query.fields, ["time", "title", "location", "link"]);
+check("default view is list", plain.query.view, "list");
+check("default list fields", plain.query.fields, ["time", "title", "location", "link"]);
 check("default range starts today", fmt(plain.query.from), today.format("YYYY-MM-DD 00:00:00"));
 check("default period 1d is just today", fmt(plain.query.to), today.format("YYYY-MM-DD 23:59:59"));
 check("no warnings", plain.warnings, []);
@@ -34,7 +34,7 @@ check(
 	[plain.query.dateHeadingFormat, plain.query.tableDateFormat, plain.query.descriptionLength],
 	[base.dateHeadingFormat, base.tableDateFormat, base.descriptionLength]
 );
-check("setting view honoured", parseQuery("", { ...base, defaultView: "table" }).query.view, "table");
+check("setting view honoured", parseQuery("", { ...base, defaultView: "agenda" }).query.view, "agenda");
 check("setting refresh honoured", parseQuery("", { ...base, autoRefresh: 300 }).query.refresh, 300);
 
 // ---- views and fields ----
@@ -49,7 +49,7 @@ check(
 );
 throws("table needs a field", () => parseQuery("view: table\nhide: date, time, title, calendar, location", base));
 
-const ranged = parseQuery("view: agenda\nperiod: 1m\nlimit: 5", base);
+const ranged = parseQuery("view: list\nperiod: 1m\nlimit: 5", base);
 check("period 1m", fmt(ranged.query.to), today.clone().add(1, "month").subtract(1, "day").format("YYYY-MM-DD 23:59:59"));
 check("period 7d is seven days", fmt(parseQuery("period: 7d", base).query.to), today.clone().add(6, "days").format("YYYY-MM-DD 23:59:59"));
 check("period eom", fmt(parseQuery("period: eom", base).query.to), today.clone().endOf("month").format("YYYY-MM-DD 23:59:59"));

@@ -52,7 +52,7 @@ export const DEFAULT_SETTINGS: CalendarConnectSettings = {
 	knownCalendars: [],
 	defaultCalendars: [],
 
-	defaultView: "agenda",
+	defaultView: "list",
 	defaultPeriod: "1d",
 	use24HourTime: true,
 	dateHeadingFormat: "dddd D MMMM",
@@ -175,7 +175,7 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 		knownCalendars,
 		defaultCalendars: strings(data.defaultCalendars),
 
-		defaultView: oneOf(data.defaultView, ["agenda", "table"] as const, d.defaultView),
+		defaultView: oneOf(data.defaultView, ["list", "agenda", "table"] as const, d.defaultView),
 		defaultPeriod: str(data.defaultPeriod, d.defaultPeriod).trim() || d.defaultPeriod,
 		use24HourTime: bool(data.use24HourTime, d.use24HourTime),
 		dateHeadingFormat: str(data.dateHeadingFormat, d.dateHeadingFormat) || d.dateHeadingFormat,
