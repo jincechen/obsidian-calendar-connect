@@ -19,11 +19,13 @@ const fmt = (m: ReturnType<typeof moment> | null) => (m ? m.format("YYYY-MM-DD H
 const base = { ...DEFAULT_SETTINGS };
 
 const plain = parseQuery("", base);
-check("default view is agenda", plain.query.view, "agenda");
-check("default agenda fields", plain.query.fields, ["time", "title", "location", "link"]);
+check("default view is list", plain.query.view, "list");
+check("default list fields", plain.query.fields, ["time", "title", "location", "link"]);
 check("default range starts today", fmt(plain.query.from), today.format("YYYY-MM-DD 00:00:00"));
 check("default period 1d is just today", fmt(plain.query.to), today.format("YYYY-MM-DD 23:59:59"));
 check("no warnings", plain.warnings, []);
+check("past defaults to the setting", plain.query.past, "dim");
+check("now defaults on", plain.query.highlightNow, true);
 check("controls default on", plain.query.controls, true);
 check("refresh defaults to the setting", plain.query.refresh, 0);
 check("all-day included", plain.query.allDay, "include");
@@ -34,7 +36,8 @@ check(
 	[plain.query.dateHeadingFormat, plain.query.tableDateFormat, plain.query.descriptionLength],
 	[base.dateHeadingFormat, base.tableDateFormat, base.descriptionLength]
 );
-check("setting view honoured", parseQuery("", { ...base, defaultView: "table" }).query.view, "table");
+check("setting view honoured", parseQuery("", { ...base, defaultView: "agenda" }).query.view, "agenda");
+check("setting past honoured", parseQuery("", { ...base, pastEvents: "hide" }).query.past, "hide");
 check("setting refresh honoured", parseQuery("", { ...base, autoRefresh: 300 }).query.refresh, 300);
 
 // ---- views and fields ----
@@ -49,7 +52,7 @@ check(
 );
 throws("table needs a field", () => parseQuery("view: table\nhide: date, time, title, calendar, location", base));
 
-const ranged = parseQuery("view: agenda\nperiod: 1m\nlimit: 5", base);
+const ranged = parseQuery("view: list\nperiod: 1m\nlimit: 5", base);
 check("period 1m", fmt(ranged.query.to), today.clone().add(1, "month").subtract(1, "day").format("YYYY-MM-DD 23:59:59"));
 check("period 7d is seven days", fmt(parseQuery("period: 7d", base).query.to), today.clone().add(6, "days").format("YYYY-MM-DD 23:59:59"));
 check("period eom", fmt(parseQuery("period: eom", base).query.to), today.clone().endOf("month").format("YYYY-MM-DD 23:59:59"));
@@ -93,6 +96,13 @@ check("time_format snake case", parseQuery("time_format: 12h", base).query.use24
 check("normalised keys do not warn", parseQuery("allDay: exclude\nhide_titles: EOD", base).warnings, []);
 
 // ---- options ----
+check("past: show", parseQuery("past: show", base).query.past, "show");
+check("past: hide", parseQuery("past: hide", base).query.past, "hide");
+check("past: dim", parseQuery("past: dim", { ...base, pastEvents: "show" }).query.past, "dim");
+throws("bad past", () => parseQuery("past: fade", base));
+check("now: false", parseQuery("now: false", base).query.highlightNow, false);
+check("now: off", parseQuery("now: off", base).query.highlightNow, false);
+throws("bad now", () => parseQuery("now: sometimes", base));
 check("controls: false", parseQuery("controls: false", base).query.controls, false);
 check("time-format 24h", parseQuery("time-format: 24h", { ...base, use24HourTime: false }).query.use24HourTime, true);
 check("time-format 12h", parseQuery("time-format: 12h", base).query.use24HourTime, false);

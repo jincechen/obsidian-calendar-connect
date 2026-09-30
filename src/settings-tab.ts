@@ -354,7 +354,7 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 					control: {
 						type: "dropdown",
 						key: "defaultView",
-						options: { agenda: "Agenda", table: "Table" },
+						options: { list: "List (compact)", agenda: "Agenda", table: "Table" },
 					},
 				},
 				{
@@ -382,6 +382,15 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 					control: { type: "text", key: "tableDateFormat", placeholder: DEFAULT_SETTINGS.tableDateFormat },
 				},
 				{ name: "Hide declined events", control: { type: "toggle", key: "hideDeclined" } },
+				{
+					name: "Past events",
+					desc: "How events that already ended today are shown. Blocks override it with `past`.",
+					control: {
+						type: "dropdown",
+						key: "pastEvents",
+						options: { show: "Show", dim: "Dim", hide: "Hide" },
+					},
+				},
 				{
 					name: "Hidden events",
 					desc: "One title pattern per line, hidden in every block. `EOD` matches that title exactly, `Start of *` a prefix, `*EOD*` anywhere, and `/regex/` is a regular expression. Blocks add more with `hide-titles`.",

@@ -103,6 +103,13 @@ export default class CalendarConnectPlugin extends Plugin {
 				editor.replaceSelection(`\`\`\`${BLOCK_LANGUAGE}\nfrom: today\nperiod: 1d\n\`\`\`\n`);
 			},
 		});
+
+		// One ticker for every block: re-draws past/now/next states without a network call.
+		this.registerInterval(
+			window.setInterval(() => {
+				for (const block of this.blocks) block.tick();
+			}, 60_000)
+		);
 	}
 
 	onunload(): void {

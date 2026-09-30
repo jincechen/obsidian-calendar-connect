@@ -167,6 +167,37 @@ export function formatDuration(start: Moment, end: Moment, allDay: boolean): str
 	return `${hours}h ${minutes}m`;
 }
 
+export type TimeState = "past" | "now" | "future";
+
+/**
+ * Where an event sits relative to `now`. A timed event is past once its end has
+ * arrived; an all-day event stays current until its last day is over.
+ */
+export function timeState(event: CalEvent, now: Moment): TimeState {
+	if (event.allDay) {
+		const start = event.start.clone().startOf("day");
+		const end = event.end.clone().endOf("day");
+		if (end.isBefore(now)) return "past";
+		return start.isAfter(now) ? "future" : "now";
+	}
+	if (event.end.isSameOrBefore(now)) return "past";
+	return event.start.isAfter(now) ? "future" : "now";
+}
+
+/** `in 25m`, `in 1h 5m`, `in 2d`, or `now` once it has started. */
+export function relativeStart(event: CalEvent, now: Moment): string {
+	if (!event.start.isAfter(now)) return "now";
+	// Rounded up, so it never claims "in 0m" before the start.
+	const minutes = Math.max(1, Math.ceil(event.start.diff(now, "minutes", true)));
+	if (minutes < 60) return `in ${minutes}m`;
+	if (minutes < 24 * 60) {
+		const hours = Math.floor(minutes / 60);
+		const rest = minutes % 60;
+		return rest ? `in ${hours}h ${rest}m` : `in ${hours}h`;
+	}
+	return `in ${Math.round(minutes / (24 * 60))}d`;
+}
+
 export interface DayItem {
 	event: CalEvent;
 	/** Set when the event spans several days: which of them this is, 1-based. */

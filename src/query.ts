@@ -2,7 +2,7 @@ import { parseYaml } from "obsidian";
 import type { Moment } from "./moment-shim";
 import { addDuration, parseDuration, resolveDate } from "./dates";
 import { MIN_AUTO_REFRESH, type CalendarConnectSettings } from "./settings";
-import type { AllDayMode, Field, ViewMode } from "./types";
+import type { AllDayMode, Field, PastMode, ViewMode } from "./types";
 
 export interface BlockQuery {
 	from: Moment;
@@ -20,6 +20,9 @@ export interface BlockQuery {
 	hiddenTitles: RegExp[];
 	allDay: AllDayMode;
 	hideDeclined: boolean;
+	past: PastMode;
+	/** Highlight the current and next event and draw a now-line. */
+	highlightNow: boolean;
 	use24HourTime: boolean;
 	dateHeadingFormat: string;
 	tableDateFormat: string;
@@ -38,8 +41,9 @@ export interface ParsedQuery {
 
 export class QueryError extends Error {}
 
-const VIEWS: ViewMode[] = ["agenda", "table"];
+const VIEWS: ViewMode[] = ["list", "agenda", "table"];
 const ALL_DAY_MODES: AllDayMode[] = ["include", "exclude", "only"];
+const PAST_MODES: PastMode[] = ["show", "dim", "hide"];
 
 const FIELDS: Field[] = [
 	"date",
@@ -69,6 +73,7 @@ const FIELD_ALIASES: Record<string, Field> = {
 };
 
 export const DEFAULT_FIELDS: Record<ViewMode, Field[]> = {
+	list: ["time", "title", "location", "link"],
 	agenda: ["time", "title", "location", "link"],
 	table: ["date", "time", "title", "calendar", "location"],
 };
@@ -93,6 +98,8 @@ const KEY_ALIASES: Record<string, string> = {
 	excludetitles: "hidetitles",
 	allday: "allday",
 	declined: "declined",
+	past: "past",
+	now: "now",
 	show: "show",
 	hide: "hide",
 	fields: "fields",
@@ -340,6 +347,8 @@ export function parseQuery(source: string, settings: CalendarConnectSettings): P
 			hiddenTitles,
 			allDay: has("allday") ? toEnum(get("allday"), ALL_DAY_MODES, "all-day") : "include",
 			hideDeclined: has("declined") ? !toBool(get("declined"), "declined") : settings.hideDeclined,
+			past: has("past") ? toEnum(get("past"), PAST_MODES, "past") : settings.pastEvents,
+			highlightNow: has("now") ? toBool(get("now"), "now") : true,
 			use24HourTime,
 			dateHeadingFormat: settings.dateHeadingFormat,
 			tableDateFormat: settings.tableDateFormat,
