@@ -1,7 +1,7 @@
 import { moment } from "../src/moment-shim";
 import { parseQuery, type BlockQuery } from "../src/query";
 import { DEFAULT_SETTINGS } from "../src/settings";
-import { EventStore, compareEvents, finishEvents, keepEvent, selectCalendars } from "../src/store";
+import { EventStore, compareEvents, finishEvents, keepEvent, selectCalendars, visibleEvents } from "../src/store";
 import type { CalEvent } from "../src/types";
 import { makeCalendar, makeEvent } from "./fixtures";
 import { check, later } from "./harness";
@@ -53,7 +53,23 @@ const finished = finishEvents(
 	[at("Two", "2026-08-14T10:00"), at("Gone", "2026-08-14T08:00", { status: "cancelled" }), at("One", "2026-08-14T09:00")],
 	query({ limit: 1 })
 );
-check("finishEvents filters, sorts and limits", finished.map((event) => event.title), ["One"]);
+check("finishEvents filters and sorts, but leaves limit to render", finished.map((event) => event.title), ["One", "Two"]);
+
+// past: hide runs before limit, so finished events cannot use up the limit.
+const afternoon = moment("2026-08-14T13:00");
+const day = [
+	at("Morning 1", "2026-08-14T08:00"),
+	at("Morning 2", "2026-08-14T09:00"),
+	at("Afternoon", "2026-08-14T15:00"),
+	at("Evening", "2026-08-14T18:00"),
+];
+check(
+	"limit counts only events still shown",
+	visibleEvents(day, query({ limit: 1, past: "hide" }), afternoon).map((event) => event.title),
+	["Afternoon"]
+);
+check("past: dim keeps finished events for the limit", visibleEvents(day, query({ limit: 2, past: "dim" }), afternoon).length, 2);
+check("no limit shows every remaining event", visibleEvents(day, query({ limit: null, past: "hide" }), afternoon).length, 2);
 
 // ---- selectCalendars ----
 const work = makeCalendar({ id: "work@x.com", accountId: "work@x.com", accountLabel: "Work", name: "Work" });

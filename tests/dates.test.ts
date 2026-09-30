@@ -3,8 +3,10 @@ import {
 	bucketByDay,
 	formatDuration,
 	parseDuration,
+	relativeStart,
 	resolveDate,
 	timeLabel,
+	timeState,
 	MAX_REPEAT_DAYS,
 } from "../src/dates";
 import { makeEvent } from "./fixtures";
@@ -38,11 +40,36 @@ check("time label 12h", timeLabel(makeEvent(), false), "9:30am–10:00am");
 
 const at = (text: string) => moment(text);
 
+// ---- timeState ----
+const timed = makeEvent(); // 09:30–10:00 on 2026-08-14
+check("timed future", timeState(timed, at("2026-08-14T09:00")), "future");
+check("timed starts now", timeState(timed, at("2026-08-14T09:30")), "now");
+check("timed in progress", timeState(timed, at("2026-08-14T09:45")), "now");
+check("timed past at its end", timeState(timed, at("2026-08-14T10:00")), "past");
+check("timed past later", timeState(timed, at("2026-08-14T15:00")), "past");
+
 const allDay = makeEvent({
 	allDay: true,
 	start: at("2026-08-14T00:00"),
 	end: at("2026-08-14T00:00").endOf("day"),
 });
+check("all-day future", timeState(allDay, at("2026-08-13T23:00")), "future");
+check("all-day is now all day", timeState(allDay, at("2026-08-14T23:30")), "now");
+check("all-day current at midnight", timeState(allDay, at("2026-08-14T00:00")), "now");
+check("all-day past the next day", timeState(allDay, at("2026-08-15T00:00:01")), "past");
+// Robust to an end stored as the start of the last day.
+const startOfDayEnd = makeEvent({ allDay: true, start: at("2026-08-14T00:00"), end: at("2026-08-14T00:00") });
+check("all-day with start-of-day end is still now", timeState(startOfDayEnd, at("2026-08-14T18:00")), "now");
+
+// ---- relativeStart ----
+check("relative 25m", relativeStart(timed, at("2026-08-14T09:05")), "in 25m");
+check("relative rounds up", relativeStart(timed, at("2026-08-14T09:05:30")), "in 25m");
+check("relative 1h 5m", relativeStart(timed, at("2026-08-14T08:25")), "in 1h 5m");
+check("relative whole hours", relativeStart(timed, at("2026-08-14T07:30")), "in 2h");
+check("relative under a minute", relativeStart(timed, at("2026-08-14T09:29:50")), "in 1m");
+check("relative now when started", relativeStart(timed, at("2026-08-14T09:30")), "now");
+check("relative now when in progress", relativeStart(timed, at("2026-08-14T09:40")), "now");
+check("relative days", relativeStart(timed, at("2026-08-12T09:30")), "in 2d");
 
 // ---- bucketByDay ----
 type Buckets = ReturnType<typeof bucketByDay>;

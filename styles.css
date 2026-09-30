@@ -61,6 +61,10 @@
 	color: var(--text-accent);
 }
 
+.cc-day.is-past-day .cc-day-label {
+	color: var(--text-muted);
+}
+
 .cc-day-count {
 	color: var(--text-faint);
 	font-size: var(--font-ui-smaller);
@@ -192,6 +196,15 @@
 	color: var(--text-faint);
 }
 
+.cc-row-rel {
+	flex: 0 0 auto;
+	margin-left: auto;
+	color: var(--text-accent);
+	font-size: var(--font-ui-smaller);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+
 .cc-row-desc {
 	overflow: hidden;
 	color: var(--text-muted);
@@ -214,6 +227,30 @@
 	opacity: 1;
 }
 
+/* --- Row states --- */
+
+.cc-row.is-past,
+.cc-row.is-past .cc-row-time {
+	color: var(--text-faint);
+}
+
+.cc-row.is-past .cc-row-dot {
+	opacity: 0.5;
+}
+
+.cc-block .cc-row.is-now {
+	box-shadow: inset 2px 0 0 var(--interactive-accent);
+}
+
+.cc-row.is-now .cc-row-time {
+	color: var(--text-accent);
+}
+
+.cc-row.is-next .cc-row-time {
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
 .cc-row.is-declined .cc-row-title {
 	color: var(--text-faint);
 	text-decoration: line-through;
@@ -221,6 +258,41 @@
 
 .cc-row.is-tentative .cc-row-title {
 	font-style: italic;
+}
+
+/* --- Now-line --- */
+
+.cc-block .cc-now-line {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	margin: 1px 0;
+	padding: 0 var(--size-4-1);
+	list-style: none;
+	pointer-events: none;
+}
+
+.cc-block .cc-now-line::marker {
+	content: none;
+}
+
+.cc-now-label {
+	flex: 0 0 auto;
+	width: var(--cc-time-width);
+	color: var(--text-accent);
+	/* Same size as the time column, so --cc-time-width lines the rule up with the dots. */
+	font-size: var(--font-ui-smaller);
+	font-weight: var(--font-semibold);
+}
+
+.cc-now-rule {
+	flex: 1 1 auto;
+	height: 1px;
+	background: var(--interactive-accent);
+}
+
+.cc-no-time .cc-now-label {
+	width: auto;
 }
 
 /* ===================================================================
@@ -299,6 +371,10 @@
 	margin-left: auto;
 }
 
+.cc-event-title-line .cc-row-rel + .cc-row-more {
+	margin-left: 0;
+}
+
 .cc-meta {
 	display: flex;
 	align-items: center;
@@ -337,6 +413,29 @@
 
 .cc-meta-description .cc-meta-text {
 	white-space: normal;
+}
+
+.cc-event.is-past {
+	color: var(--text-faint);
+}
+
+.cc-event.is-past .cc-event-title,
+.cc-event.is-past .cc-event-time {
+	color: var(--text-faint);
+}
+
+.cc-block .cc-event.is-now {
+	border-left-color: var(--interactive-accent);
+	box-shadow: inset 2px 0 0 var(--interactive-accent);
+}
+
+.cc-event.is-now .cc-event-time {
+	color: var(--text-accent);
+}
+
+.cc-event.is-next .cc-event-time {
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
 }
 
 .cc-event.is-declined .cc-event-title {
@@ -409,6 +508,23 @@
 
 .cc-table .cc-col-description {
 	color: var(--text-muted);
+}
+
+.cc-table .cc-row-rel {
+	margin-left: var(--size-4-2);
+}
+
+.cc-block .cc-table-row.is-past td {
+	color: var(--text-faint);
+}
+
+.cc-block .cc-table-row.is-now td:first-child {
+	box-shadow: inset 2px 0 0 var(--interactive-accent);
+}
+
+.cc-table-row.is-next .cc-col-time {
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
 }
 
 .cc-table-row.is-declined .cc-col-title {

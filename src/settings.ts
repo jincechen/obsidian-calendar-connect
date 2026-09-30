@@ -1,4 +1,4 @@
-import type { CalendarInfo, ViewMode } from "./types";
+import type { CalendarInfo, PastMode, ViewMode } from "./types";
 
 /**
  * One connected Google account as the vault knows it. Deliberately holds no
@@ -33,6 +33,7 @@ export interface CalendarConnectSettings {
 	dateHeadingFormat: string;
 	tableDateFormat: string;
 	hideDeclined: boolean;
+	pastEvents: PastMode;
 	/** Title patterns hidden in every block. Globs, or /regex/. */
 	hiddenTitles: string[];
 	descriptionLength: number;
@@ -58,6 +59,7 @@ export const DEFAULT_SETTINGS: CalendarConnectSettings = {
 	dateHeadingFormat: "dddd D MMMM",
 	tableDateFormat: "ddd D MMM",
 	hideDeclined: true,
+	pastEvents: "dim",
 	hiddenTitles: [],
 	descriptionLength: 200,
 
@@ -181,6 +183,7 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 		dateHeadingFormat: str(data.dateHeadingFormat, d.dateHeadingFormat) || d.dateHeadingFormat,
 		tableDateFormat: str(data.tableDateFormat, d.tableDateFormat) || d.tableDateFormat,
 		hideDeclined: bool(data.hideDeclined, d.hideDeclined),
+		pastEvents: oneOf(data.pastEvents, ["show", "dim", "hide"] as const, d.pastEvents),
 		hiddenTitles: strings(data.hiddenTitles).map((line) => line.trim()).filter(Boolean),
 		descriptionLength: num(data.descriptionLength, d.descriptionLength, 0, 10000),
 

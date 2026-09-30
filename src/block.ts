@@ -4,16 +4,17 @@ import { AuthError } from "./auth";
 import { describeError } from "./google";
 import type CalendarConnectPlugin from "./main";
 import { QueryError, parseQuery, type BlockQuery } from "./query";
-import { renderEvents, renderMessage, type BlockActions } from "./render";
+import { renderEvents, renderMessage, stateSignature, type BlockActions } from "./render";
 import { openExternal } from "./safety";
 import type { CalEvent } from "./types";
 
-/** What was last drawn. */
+/** What was last drawn, so the minute tick can redraw without fetching. */
 interface Drawn {
 	events: CalEvent[];
 	query: BlockQuery;
 	warnings: string[];
 	lastUpdated: Moment | null;
+	signature: string;
 }
 
 /**
@@ -28,6 +29,8 @@ export class CalendarBlock extends MarkdownRenderChild {
 	/** Epoch ms of the data last drawn; drives the catch-up refresh. */
 	private fetchedAt = 0;
 	private calendarKeys: string[] = [];
+	/** The day the query was parsed on: relative ranges like `today` move at midnight. */
+	private parsedDay = "";
 
 	constructor(
 		containerEl: HTMLElement,
@@ -70,6 +73,7 @@ export class CalendarBlock extends MarkdownRenderChild {
 			);
 			return;
 		}
+		this.parsedDay = moment().format("YYYY-MM-DD");
 		const { query, warnings } = parsed;
 
 		if (settings.accounts.length === 0) {
@@ -114,6 +118,7 @@ export class CalendarBlock extends MarkdownRenderChild {
 				query,
 				warnings: [...warnings, ...result.warnings],
 				lastUpdated: result.fetchedAt === null ? null : moment(result.fetchedAt),
+				signature: "",
 			});
 		} catch (error) {
 			if (token !== this.renderToken) return;
@@ -132,6 +137,23 @@ export class CalendarBlock extends MarkdownRenderChild {
 		}
 	}
 
+	/**
+	 * Called every minute by the plugin. Redraws from what is already in hand,
+	 * and only when the time-dependent state (past/now/next, labels) changed.
+	 */
+	tick(): void {
+		if (!this.containerEl.isConnected || this.containerEl.doc.hidden) return;
+		if (this.drawn && this.parsedDay && this.parsedDay !== moment().format("YYYY-MM-DD")) {
+			// Past midnight: `today` means something else now.
+			void this.render();
+			return;
+		}
+		if (!this.drawn || this.isEditingInside()) return;
+		const now = moment();
+		if (stateSignature(this.drawn.events, this.drawn.query, now) === this.drawn.signature) return;
+		this.draw(this.drawn, now);
+	}
+
 	/** Drops this block's calendars from the cache and fetches them again. */
 	refresh(): void {
 		for (const key of this.calendarKeys) this.plugin.store.invalidateCalendar(key);
@@ -145,7 +167,14 @@ export class CalendarBlock extends MarkdownRenderChild {
 			now,
 			actions: this.actions(state.query),
 		});
-		this.drawn = state;
+		this.drawn = { ...state, signature: stateSignature(state.events, state.query, now) };
+	}
+
+	/** A redraw would wipe a focused input inside the block (e.g. a rename field). */
+	private isEditingInside(): boolean {
+		const active = this.containerEl.doc.activeElement;
+		if (!active || !this.containerEl.contains(active)) return false;
+		return active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement || active instanceof HTMLSelectElement;
 	}
 
 	private reset(): void {

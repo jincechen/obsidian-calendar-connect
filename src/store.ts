@@ -1,3 +1,4 @@
+import { timeState } from "./dates";
 import type { Moment } from "./moment-shim";
 import { resolveAccounts, resolveCalendars, type BlockQuery } from "./query";
 import type { CalEvent, CalendarInfo } from "./types";
@@ -27,10 +28,21 @@ export function compareEvents(a: CalEvent, b: CalEvent): number {
 	return a.start.valueOf() - b.start.valueOf() || a.title.localeCompare(b.title);
 }
 
-/** Filter, order and cap a block's events. */
+/**
+ * Filter and order a block's events. `limit` is applied at render, after
+ * `past: hide`, so finished events cannot use up the limit.
+ */
 export function finishEvents(events: CalEvent[], query: BlockQuery): CalEvent[] {
-	const kept = events.filter((event) => keepEvent(event, query)).sort(compareEvents);
-	return query.limit === null ? kept : kept.slice(0, query.limit);
+	return events.filter((event) => keepEvent(event, query)).sort(compareEvents);
+}
+
+/**
+ * `past: hide` and `limit` both depend on the clock, so they are applied here at
+ * render time, in that order: a limit must count only events that are still shown.
+ */
+export function visibleEvents(events: CalEvent[], query: BlockQuery, now: Moment): CalEvent[] {
+	const shown = query.past === "hide" ? events.filter((event) => timeState(event, now) !== "past") : events;
+	return query.limit === null ? shown : shown.slice(0, query.limit);
 }
 
 /**

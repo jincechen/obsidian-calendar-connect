@@ -13,7 +13,7 @@ check("defaults untouched", DEFAULT_SETTINGS.accounts.length, 0);
 const messy = sanitiseSettings({
 	clientId: "  id.apps.googleusercontent.com ",
 	defaultView: "kanban",
-	hideDeclined: false,
+	pastEvents: "hide",
 	cacheTtl: "120",
 	descriptionLength: -5,
 	autoRefresh: 10,
@@ -32,7 +32,7 @@ const messy = sanitiseSettings({
 });
 check("client id trimmed", messy.clientId, "id.apps.googleusercontent.com");
 check("unknown view falls back", messy.defaultView, "list");
-check("valid boolean kept", messy.hideDeclined, false);
+check("valid enum kept", messy.pastEvents, "hide");
 check("numeric string coerced", messy.cacheTtl, 120);
 check("negative clamped", messy.descriptionLength, 0);
 check("auto-refresh raised to the minimum", messy.autoRefresh, 60);

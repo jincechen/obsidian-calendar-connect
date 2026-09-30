@@ -4,6 +4,9 @@ export type ViewMode = "list" | "agenda" | "table";
 
 export type AllDayMode = "include" | "exclude" | "only";
 
+/** How events that have already ended are shown. */
+export type PastMode = "show" | "dim" | "hide";
+
 /** Fields that can be surfaced in a view and used as table columns. */
 export type Field =
 	| "date"
