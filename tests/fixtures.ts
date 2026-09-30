@@ -13,6 +13,7 @@ export function makeCalendar(overrides: Partial<CalendarInfo> = {}): CalendarInf
 		color: "#7a86b8",
 		primary: true,
 		timeZone: "Europe/London",
+		accessRole: "owner",
 		accountId,
 		accountLabel: "Personal",
 		...overrides,

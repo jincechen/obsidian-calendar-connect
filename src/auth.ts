@@ -7,11 +7,11 @@ import type { StoredGrant } from "./tokens";
 // the app-facing `authorize(app, config)`.
 
 export const SCOPE_CALENDAR_LIST = "https://www.googleapis.com/auth/calendar.calendarlist.readonly";
-export const SCOPE_EVENTS_READONLY = "https://www.googleapis.com/auth/calendar.events.readonly";
+export const SCOPE_EVENTS = "https://www.googleapis.com/auth/calendar.events";
 /** Broader scopes that also satisfy our needs, in case a grant carries them. */
 const SCOPE_CALENDAR = "https://www.googleapis.com/auth/calendar";
 const SCOPE_CALENDAR_READONLY = "https://www.googleapis.com/auth/calendar.readonly";
-export const SCOPES = [SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY];
+export const SCOPES = [SCOPE_CALENDAR_LIST, SCOPE_EVENTS];
 
 const AUTH_ENDPOINT = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
@@ -148,6 +148,10 @@ export function parseScopes(value: unknown): string[] {
 	const parts =
 		typeof value === "string" ? value.split(/\s+/) : Array.isArray(value) ? value.filter((v) => typeof v === "string") : [];
 	return [...new Set((parts as string[]).filter((scope) => scope !== ""))];
+}
+
+export function canWriteWith(scopes: string[]): boolean {
+	return scopes.includes(SCOPE_EVENTS) || scopes.includes(SCOPE_CALENDAR);
 }
 
 export function hasCalendarList(scopes: string[]): boolean {
@@ -481,7 +485,7 @@ export type ConsentPresenter = (view: ConsentView) => () => void;
 /**
  * Runs the whole consent flow: listener when possible, paste always, exactly one
  * settles. Rejects with AuthError on cancel, timeout or failure. Requires the
- * calendar-list scope.
+ * calendar-list scope; a missing write scope is left for the caller to report.
  */
 export async function authorizeWith(config: ClientConfig & { port: number }, present: ConsentPresenter): Promise<TokenGrant> {
 	if (!config.clientId || !config.clientSecret) {
@@ -589,6 +593,10 @@ export class GoogleAuth {
 
 	scopes(): string[] {
 		return this.getGrant()?.scopes ?? [];
+	}
+
+	canWrite(): boolean {
+		return canWriteWith(this.scopes());
 	}
 
 	seed(accessToken: string, expiresAt: number): void {

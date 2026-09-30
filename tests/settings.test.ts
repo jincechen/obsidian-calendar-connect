@@ -24,7 +24,7 @@ const messy = sanitiseSettings({
 		"nonsense",
 	],
 	knownCalendars: [
-		{ id: "a@x.com", accountId: "a@x.com", name: "A", color: "red;background:url(x)" },
+		{ id: "a@x.com", accountId: "a@x.com", name: "A", color: "red;background:url(x)", accessRole: "owner" },
 		{ id: "orphan", accountId: "gone@x.com", name: "Orphan" },
 	],
 	noteTypes: [{ id: "n" }],

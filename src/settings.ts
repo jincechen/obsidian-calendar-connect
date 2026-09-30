@@ -141,6 +141,7 @@ function sanitiseCalendar(value: unknown): CalendarInfo | null {
 		color: /^#[0-9a-f]{3,8}$/i.test(color) ? color : "",
 		primary: bool(value.primary, false),
 		timeZone: optStr(value.timeZone),
+		accessRole: str(value.accessRole, "reader"),
 		accountId,
 		accountLabel: str(value.accountLabel, accountId),
 	};

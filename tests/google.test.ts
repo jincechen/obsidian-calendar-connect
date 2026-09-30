@@ -162,7 +162,7 @@ serial(async () => {
 			check("persistent 401 → kind auth", [error instanceof CalendarApiError, (error as CalendarApiError).kind, seen.length], [true, "auth", 2]);
 		}
 
-		// listCalendars sanitises colour, skips deleted, pages.
+		// listCalendars keeps accessRole, sanitises colour, skips deleted, pages.
 		seen.length = 0;
 		api = (req) =>
 			req.url.includes("pageToken=p2")
@@ -176,9 +176,9 @@ serial(async () => {
 						],
 				  });
 		const calendars = await client.listCalendars();
-		check("listCalendars entries", calendars.map((c) => [c.key, c.name, c.color, c.primary, c.timeZone]), [
-			["alex@example.com::alex@example.com", "Me", "#9fe1e7", true, "Europe/London"],
-			["alex@example.com::team@group.calendar.google.com", "Team", "", false, undefined],
+		check("listCalendars entries", calendars.map((c) => [c.key, c.name, c.color, c.accessRole, c.primary, c.timeZone]), [
+			["alex@example.com::alex@example.com", "Me", "#9fe1e7", "owner", true, "Europe/London"],
+			["alex@example.com::team@group.calendar.google.com", "Team", "", "reader", false, undefined],
 		]);
 		check("listCalendars paged", seen.length, 2);
 
@@ -199,6 +199,118 @@ serial(async () => {
 			"2026-08-14T00:00:00.000Z",
 		]);
 		check("listEvents normalises and skips id-less events", events.map((e) => e.id), ["evt1"]);
+
+		// patch: If-Match, nulls preserved, sendUpdates, rate-only.
+		seen.length = 0;
+		api = () => json(200, { id: "e/1", etag: '"2"' });
+		const patched = await client.patchEvent(
+			"alex@example.com",
+			"e/1",
+			{ start: { date: "2026-08-14", dateTime: null }, end: { date: "2026-08-15", dateTime: null } },
+			{ etag: '"1"', sendUpdates: "none" }
+		);
+		const patchReq = seen[0];
+		check("patch method and path", [patchReq.method, new URL(patchReq.url).pathname], ["PATCH", "/calendar/v3/calendars/alex%40example.com/events/e%2F1"]);
+		check("patch sends If-Match", patchReq.headers?.["If-Match"], '"1"');
+		check("patch keeps nulls", patchReq.body, '{"start":{"date":"2026-08-14","dateTime":null},"end":{"date":"2026-08-15","dateTime":null}}');
+		check("patch content type", patchReq.contentType, "application/json");
+		check("patch sendUpdates", new URL(patchReq.url).searchParams.get("sendUpdates"), "none");
+		check("patch returns the event", patched.etag, '"2"');
+
+		seen.length = 0;
+		await client.patchEvent("alex@example.com", "e1", { summary: "x" }, { sendUpdates: "all" });
+		check("patch without etag sends no If-Match", seen[0].headers?.["If-Match"], undefined);
+
+		// 412 → conflict, never retried.
+		seen.length = 0;
+		api = () => json(412, { error: { message: "Precondition Failed", errors: [{ reason: "conditionNotMet" }] } });
+		try {
+			await client.patchEvent("alex@example.com", "e1", { summary: "x" }, { etag: '"old"', sendUpdates: "none" });
+			check("412 rejects", "resolved", "rejected");
+		} catch (error) {
+			check("412 → CalendarApiError conflict", [error instanceof CalendarApiError, (error as CalendarApiError).kind, (error as CalendarApiError).status, seen.length], [
+				true,
+				"conflict",
+				412,
+				1,
+			]);
+		}
+
+		// patch is not retried on 500 (rate-only).
+		seen.length = 0;
+		api = () => json(500, { error: { message: "Backend Error" } });
+		try {
+			await client.patchEvent("alex@example.com", "e1", { summary: "x" }, { sendUpdates: "none" });
+		} catch (error) {
+			check("patch 500 → other, single attempt", [(error as CalendarApiError).kind, seen.length], ["other", 1]);
+		}
+
+		// 403 mapping.
+		const cases: Array<[number, unknown, string]> = [
+			[403, { error: { message: "Rate Limit Exceeded", errors: [{ reason: "rateLimitExceeded" }] } }, "rateLimited"],
+			[403, { error: { message: "Quota", errors: [{ reason: "quotaExceeded" }] } }, "quota"],
+			[403, { error: { message: "Daily Limit Exceeded", errors: [{ reason: "dailyLimitExceeded" }] } }, "quota"],
+			[403, { error: { message: "Google Calendar API has not been used in project 123 before or it is disabled.", errors: [{ reason: "accessNotConfigured" }] } }, "apiDisabled"],
+			[403, { error: { message: "Calendar API is disabled" } }, "apiDisabled"],
+			[403, { error: { message: "Forbidden", errors: [{ reason: "forbiddenForNonOrganizer" }] } }, "forbidden"],
+			[404, { error: { message: "Not Found" } }, "notFound"],
+			[410, { error: { message: "Gone" } }, "notFound"],
+			[429, { error: { message: "Too many" } }, "rateLimited"],
+			[400, { error: { message: "Bad Request" } }, "other"],
+		];
+		for (const [status, body, kind] of cases) {
+			api = () => json(status, body);
+			try {
+				await client.patchEvent("c", "e", {}, { sendUpdates: "none" });
+				check(`${status} rejects`, "resolved", "rejected");
+			} catch (error) {
+				check(`status ${status} ${JSON.stringify(body).slice(0, 60)} → ${kind}`, (error as CalendarApiError).kind, kind);
+			}
+		}
+
+		// delete: 404/410 resolve; sendUpdates passed.
+		for (const status of [204, 404, 410]) {
+			seen.length = 0;
+			api = () => ({ status, json: null, text: "", headers: {} });
+			let ok = true;
+			try {
+				await client.deleteEvent("alex@example.com", "e1", { sendUpdates: "all" });
+			} catch {
+				ok = false;
+			}
+			check(`delete ${status} resolves`, [ok, seen[0].method, new URL(seen[0].url).searchParams.get("sendUpdates")], [true, "DELETE", "all"]);
+		}
+		api = () => json(403, { error: { message: "Forbidden", errors: [{ reason: "forbiddenForNonOrganizer" }] } });
+		try {
+			await client.deleteEvent("alex@example.com", "e1", { sendUpdates: "none" });
+			check("delete 403 rejects", "resolved", "rejected");
+		} catch (error) {
+			check("delete 403 → forbidden", (error as CalendarApiError).kind, "forbidden");
+		}
+
+		// insert: 503 retried (idempotent), 409 → GET the existing event.
+		seen.length = 0;
+		let inserts = 0;
+		api = (req) => {
+			if (req.method === "POST") return ++inserts === 1 ? json(503, {}) : json(409, { error: { message: "The requested identifier already exists.", errors: [{ reason: "duplicate" }] } });
+			return json(200, { id: "newid123", summary: "Created", etag: '"9"' });
+		};
+		const inserted = await client.insertEvent("alex@example.com", { id: "newid123", summary: "Created" }, { sendUpdates: "none" });
+		check("insert retries then fetches on 409", [inserts, inserted.id, seen.map((r) => r.method)], [2, "newid123", ["POST", "POST", "GET"]]);
+		check("insert body", seen[0].body, '{"id":"newid123","summary":"Created"}');
+		check("insert follow-up GET path", new URL(seen[2].url).pathname, "/calendar/v3/calendars/alex%40example.com/events/newid123");
+
+		// move.
+		seen.length = 0;
+		api = () => json(200, { id: "e1" });
+		await client.moveEvent("alex@example.com", "e1", "team@group.calendar.google.com", { sendUpdates: "externalOnly" });
+		const moveUrl = new URL(seen[0].url);
+		check("move request", [seen[0].method, moveUrl.pathname, moveUrl.searchParams.get("destination"), moveUrl.searchParams.get("sendUpdates")], [
+			"POST",
+			"/calendar/v3/calendars/alex%40example.com/events/e1/move",
+			"team@group.calendar.google.com",
+			"externalOnly",
+		]);
 
 		// Network failure → CalendarApiError network; reauth passes through.
 		api = () => {

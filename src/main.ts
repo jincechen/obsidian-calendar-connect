@@ -1,5 +1,5 @@
 import { Notice, Plugin } from "obsidian";
-import { AuthError, GoogleAuth, ReauthRequiredError, revoke, type ClientConfig } from "./auth";
+import { AuthError, GoogleAuth, ReauthRequiredError, canWriteWith, revoke, type ClientConfig } from "./auth";
 import { CalendarBlock } from "./block";
 import { GoogleCalendarClient, describeError } from "./google";
 import type { BlockQuery } from "./query";
@@ -242,6 +242,11 @@ export default class CalendarConnectPlugin extends Plugin {
 		return this.needsReconnect.has(id);
 	}
 
+	canWrite(id: string): boolean {
+		if (!this.grants.has(id) || this.needsReconnect.has(id)) return false;
+		return this.runtimes.get(id)?.auth.canWrite() ?? false;
+	}
+
 	clientFor(id: string): GoogleCalendarClient | null {
 		return this.grants.has(id) ? this.runtimes.get(id)?.client ?? null : null;
 	}
@@ -348,7 +353,12 @@ export default class CalendarConnectPlugin extends Plugin {
 			this.runtimes.get(id)?.auth.seed(grant.accessToken, grant.expiresAt);
 
 			const name = this.account(id)?.label ?? address ?? "Google account";
-			new Notice(`Connected ${name}`, 8000);
+			new Notice(
+				canWriteWith(held.scopes)
+					? `Connected ${name} (read & write)`
+					: `Connected ${name} (read-only: editing permission not granted)`,
+				8000
+			);
 
 			this.invalidateAll();
 			await this.getCalendars().catch(() => undefined);

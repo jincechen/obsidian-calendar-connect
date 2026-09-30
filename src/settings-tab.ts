@@ -8,7 +8,7 @@ import {
 	type SettingDefinitionList,
 	type SettingDefinitionPage,
 } from "obsidian";
-import { SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY } from "./auth";
+import { SCOPE_CALENDAR_LIST, SCOPE_EVENTS } from "./auth";
 import { describeError } from "./google";
 import type CalendarConnectPlugin from "./main";
 import { isValidPeriod } from "./query";
@@ -162,7 +162,7 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 			const scopes = list.createEl("li", { text: "Add the scopes " });
 			scopes.createEl("code", { text: SCOPE_CALENDAR_LIST.replace("https://www.googleapis.com", "…") });
 			scopes.appendText(" and ");
-			scopes.createEl("code", { text: SCOPE_EVENTS_READONLY.replace("https://www.googleapis.com", "…") });
+			scopes.createEl("code", { text: SCOPE_EVENTS.replace("https://www.googleapis.com", "…") });
 			scopes.appendText(".");
 			list.createEl("li", {
 				text:
@@ -219,7 +219,14 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 		if (this.plugin.needsReconnecting(account.id)) {
 			return { desc: `${account.id} · Needs reconnecting`, warning: true, action: "Reconnect" };
 		}
-		return { desc: `${account.id} · ${count}`, warning: false, action: "Reconnect" };
+		if (!this.plugin.canWrite(account.id)) {
+			return {
+				desc: `${account.id} · ${count} · Read-only — reconnect to enable editing`,
+				warning: true,
+				action: "Reconnect to enable editing",
+			};
+		}
+		return { desc: `${account.id} · ${count} · Read & write`, warning: false, action: "Reconnect" };
 	}
 
 	private accountsList(): SettingDefinitionList {

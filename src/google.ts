@@ -1,6 +1,6 @@
 import { moment, type Moment } from "./moment-shim";
 import { AuthError, ReauthRequiredError, type GoogleAuth } from "./auth";
-import { HttpError, parseGoogleError, request, type HttpResponse } from "./http";
+import { HttpError, parseGoogleError, request, type HttpResponse, type RetryPolicy } from "./http";
 import { safeColor } from "./safety";
 import { calendarKey } from "./settings";
 import type { Attendee, CalEvent, CalendarInfo, RawAttendee, RawCalendarListEntry, RawEvent } from "./types";
@@ -33,6 +33,8 @@ export class CalendarApiError extends Error {
 		this.name = "CalendarApiError";
 	}
 }
+
+export type SendUpdates = "all" | "externalOnly" | "none";
 
 export interface AccountRef {
 	id: string;
@@ -197,6 +199,11 @@ function asObject(value: unknown): Record<string, unknown> {
 
 interface CallOptions {
 	query?: Record<string, string>;
+	body?: unknown;
+	headers?: Record<string, string>;
+	retryPolicy?: RetryPolicy;
+	/** Error statuses the caller handles itself. */
+	allow?: number[];
 }
 
 export class GoogleCalendarClient {
@@ -211,11 +218,20 @@ export class GoogleCalendarClient {
 	 * mapped to CalendarApiError. AuthErrors from the token layer pass through unchanged
 	 * so callers can tell "needs reconnecting" from an API failure.
 	 */
-	private async call(method: "GET", path: string, options: CallOptions = {}): Promise<HttpResponse> {
+	private async call(method: "GET" | "POST" | "PATCH" | "DELETE", path: string, options: CallOptions = {}): Promise<HttpResponse> {
 		const query = options.query ? new URLSearchParams(options.query).toString() : "";
 		const url = `${API_BASE}${path}${query ? `?${query}` : ""}`;
+		const hasBody = options.body !== undefined;
 
-		const send = (token: string) => request({ url, method, headers: { Authorization: `Bearer ${token}` } });
+		const send = (token: string) =>
+			request({
+				url,
+				method,
+				headers: { ...options.headers, Authorization: `Bearer ${token}` },
+				body: hasBody ? JSON.stringify(options.body) : undefined,
+				contentType: hasBody ? "application/json" : undefined,
+				retryPolicy: options.retryPolicy,
+			});
 
 		let response: HttpResponse;
 		try {
@@ -228,7 +244,9 @@ export class GoogleCalendarClient {
 			throw new CalendarApiError(error instanceof Error ? error.message : String(error), "other");
 		}
 
-		if (response.status >= 400) throw errorFromResponse(response);
+		if (response.status >= 400 && !(options.allow ?? []).includes(response.status)) {
+			throw errorFromResponse(response);
+		}
 		return response;
 	}
 
@@ -257,6 +275,7 @@ export class GoogleCalendarClient {
 					color: safeColor(raw.backgroundColor) ?? "",
 					primary: Boolean(raw.primary),
 					timeZone: raw.timeZone,
+					accessRole: raw.accessRole ?? "reader",
 					accountId: account.id,
 					accountLabel: account.label,
 				});
@@ -304,6 +323,70 @@ export class GoogleCalendarClient {
 		return events;
 	}
 
+	async getEvent(calendarId: string, eventId: string): Promise<RawEvent> {
+		const response = await this.call("GET", eventPath(calendarId, eventId));
+		return asObject(response.json) as RawEvent;
+	}
+
+	/**
+	 * Creates an event. The body carries a client-generated id, so a retry after a
+	 * lost response is safe: Google answers 409 and we fetch what was created.
+	 */
+	async insertEvent(calendarId: string, body: RawEvent, opts: { sendUpdates: SendUpdates }): Promise<RawEvent> {
+		const response = await this.call("POST", `/calendars/${encodeURIComponent(calendarId)}/events`, {
+			query: { sendUpdates: opts.sendUpdates },
+			body,
+			retryPolicy: "idempotent",
+			allow: body.id ? [409] : [],
+		});
+		if (response.status === 409 && body.id) return this.getEvent(calendarId, body.id);
+		return asObject(response.json) as RawEvent;
+	}
+
+	/**
+	 * Partial update. With `etag`, Google rejects a stale write with 412 (kind
+	 * "conflict"). `null` values in the body are sent as-is: they clear fields.
+	 */
+	async patchEvent(
+		calendarId: string,
+		eventId: string,
+		body: Record<string, unknown>,
+		opts: { etag?: string; sendUpdates: SendUpdates }
+	): Promise<RawEvent> {
+		const response = await this.call("PATCH", eventPath(calendarId, eventId), {
+			query: { sendUpdates: opts.sendUpdates },
+			body,
+			headers: opts.etag ? { "If-Match": opts.etag } : undefined,
+			retryPolicy: "rate-only",
+		});
+		return asObject(response.json) as RawEvent;
+	}
+
+	/** Deleting something already gone (404/410) counts as success. */
+	async deleteEvent(calendarId: string, eventId: string, opts: { sendUpdates: SendUpdates }): Promise<void> {
+		await this.call("DELETE", eventPath(calendarId, eventId), {
+			query: { sendUpdates: opts.sendUpdates },
+			retryPolicy: "idempotent",
+			allow: [404, 410],
+		});
+	}
+
+	async moveEvent(
+		calendarId: string,
+		eventId: string,
+		destinationId: string,
+		opts: { sendUpdates: SendUpdates }
+	): Promise<RawEvent> {
+		const response = await this.call("POST", `${eventPath(calendarId, eventId)}/move`, {
+			query: { destination: destinationId, sendUpdates: opts.sendUpdates },
+			retryPolicy: "rate-only",
+		});
+		return asObject(response.json) as RawEvent;
+	}
+}
+
+function eventPath(calendarId: string, eventId: string): string {
+	return `/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`;
 }
 
 /** A sentence for the user. Never includes tokens or request headers. */
