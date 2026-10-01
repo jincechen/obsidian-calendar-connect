@@ -846,6 +846,37 @@
 	resize: vertical;
 }
 
+/* Segmented Yes / Maybe / No. */
+.cc-editor-rsvp {
+	display: inline-flex;
+	overflow: hidden;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: var(--radius-m);
+}
+
+.cc-editor .cc-editor-rsvp-option {
+	border: none;
+	border-radius: 0;
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	cursor: pointer;
+}
+
+.cc-editor .cc-editor-rsvp-option + .cc-editor-rsvp-option {
+	border-left: 1px solid var(--background-modifier-border);
+}
+
+.cc-editor .cc-editor-rsvp-option:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.cc-editor .cc-editor-rsvp-option.is-active {
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+}
+
 .cc-editor-footer {
 	flex-wrap: wrap;
 	gap: var(--size-4-2);

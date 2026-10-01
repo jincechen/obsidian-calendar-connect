@@ -1,4 +1,4 @@
-import { Menu, Notice, setIcon } from "obsidian";
+import { Menu, Notice, setIcon, type MenuItem } from "obsidian";
 import type { Moment } from "./moment-shim";
 import {
 	bucketByDay,
@@ -24,6 +24,7 @@ export interface BlockActions {
 	canCreate(): boolean;
 	/** `day` is the start of the day to create on. */
 	create(day: Moment): void;
+	rsvp(event: CalEvent, response: "accepted" | "tentative" | "declined"): void;
 	remove(event: CalEvent): void;
 	refresh(): void;
 }
@@ -34,6 +35,8 @@ export interface RenderOptions {
 	now: Moment;
 	actions: BlockActions;
 }
+
+type Rsvp = "accepted" | "tentative" | "declined";
 
 const FIELD_LABELS: Record<Field, string> = {
 	date: "Date",
@@ -71,6 +74,12 @@ const RESPONSE_LABELS: Record<string, string> = {
 function responseLabel(response: string): string | undefined {
 	return Object.prototype.hasOwnProperty.call(RESPONSE_LABELS, response) ? RESPONSE_LABELS[response] : undefined;
 }
+
+const RSVP_CHOICES: Array<{ value: Rsvp; label: string; icon: string }> = [
+	{ value: "accepted", label: "Yes", icon: "check" },
+	{ value: "tentative", label: "Maybe", icon: "circle-help" },
+	{ value: "declined", label: "No", icon: "x" },
+];
 
 /** The "next" event only shows how soon it starts when that is under this many minutes away. */
 const RELATIVE_WINDOW_MINUTES = 120;
@@ -226,6 +235,9 @@ function iconButton(parent: HTMLElement, cls: string, icon: string, label: strin
 
 // --- Event menu --------------------------------------------------------------
 
+/** Undocumented but long-standing; used only when present, with a flat fallback. */
+type SubmenuCapable = MenuItem & { setSubmenu?: () => Menu };
+
 /** Keyboard Shift+F10 can also raise a native contextmenu; this keeps it to one menu. */
 let lastMenuAt = 0;
 
@@ -248,6 +260,29 @@ function showEventMenu(
 			.setIcon(editability.canEdit ? "pencil" : "eye")
 			.onClick(() => actions.open(event))
 	);
+
+	if (editability.canRsvp) {
+		let target: Menu = menu;
+		let prefix = "";
+		menu.addItem((item) => {
+			item.setTitle("RSVP").setIcon("reply");
+			const submenu = (item as SubmenuCapable).setSubmenu?.();
+			if (submenu) target = submenu;
+			else {
+				item.setIsLabel(true);
+				prefix = "RSVP: ";
+			}
+		});
+		for (const choice of RSVP_CHOICES) {
+			target.addItem((item) =>
+				item
+					.setTitle(`${prefix}${choice.label}`)
+					.setIcon(choice.icon)
+					.setChecked(event.selfResponse === choice.value)
+					.onClick(() => actions.rsvp(event, choice.value))
+			);
+		}
+	}
 
 	const meet = safeExternalUrl(event.meetUrl);
 	if (meet) menu.addItem((item) => item.setTitle("Join call").setIcon("video").onClick(() => openExternal(meet)));

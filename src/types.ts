@@ -21,6 +21,9 @@ export type Field =
 	| "response"
 	| "link";
 
+/** The attendee response values Google uses. */
+export type ResponseStatus = "needsAction" | "declined" | "tentative" | "accepted";
+
 // --- Google's wire shapes ------------------------------------------------
 // Only the members this plugin reads or writes. Everything is optional because
 // Google omits fields freely; normalisation is where defaults are decided.

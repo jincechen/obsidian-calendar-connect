@@ -5,7 +5,7 @@
  */
 import { moment, type Moment } from "./moment-shim";
 import { isValidEmail } from "./safety";
-import type { CalEvent, CalendarInfo, Editability, RawAttendee, RawEvent, RawEventDate } from "./types";
+import type { CalEvent, CalendarInfo, Editability, RawAttendee, RawEvent, RawEventDate, ResponseStatus } from "./types";
 
 const DATE = "YYYY-MM-DD";
 const TIME = "HH:mm";
@@ -293,6 +293,25 @@ export function buildInsertBody(draft: EventDraft, timeZone: string, id: string)
 	}
 	if (draft.guests.length) body.attendees = draft.guests.map((email) => ({ email }));
 	return body;
+}
+
+export type RsvpResponse = Extract<ResponseStatus, "accepted" | "tentative" | "declined">;
+
+/**
+ * Changes only this account's response. Google replaces the attendee list on
+ * patch, so the full list goes back — unless Google omitted it, in which case the
+ * `attendeesOmitted` form updates just our own entry.
+ */
+export function buildRsvpPatch(event: CalEvent, response: RsvpResponse): Record<string, unknown> {
+	const self = event.rawAttendees.find((a) => a.self === true);
+	if (!self) throw new Error("You are not a guest of this event");
+	if (event.attendeesOmitted) {
+		const email = self.email ?? event.accountId;
+		return { attendeesOmitted: true, attendees: [{ email, responseStatus: response }] };
+	}
+	return {
+		attendees: event.rawAttendees.map((a) => (a === self ? { ...a, responseStatus: response } : a)),
+	};
 }
 
 const ID_ALPHABET = "0123456789abcdefghijklmnopqrstuv";

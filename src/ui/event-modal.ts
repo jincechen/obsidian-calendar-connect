@@ -1,6 +1,6 @@
 /**
  * The event editor: one modal with three modes.
- *  - view:   everything disabled, with a banner saying why
+ *  - view:   everything disabled, with a banner saying why (plus RSVP when allowed)
  *  - edit:   an existing event the account may change
  *  - create: a new event
  * Writes are never optimistic and never retried automatically: on success the
@@ -10,12 +10,13 @@ import { App, ButtonComponent, DropdownComponent, Modal, Notice, Setting, TextCo
 import type { Moment } from "../moment-shim";
 import type { CalendarConnectSettings } from "../settings";
 import type { CalEvent, CalendarInfo, Editability } from "../types";
-import { CalendarApiError, describeError, type GoogleCalendarClient, type SendUpdates } from "../google";
+import { CalendarApiError, describeError, normaliseEvent, type GoogleCalendarClient, type SendUpdates } from "../google";
 import { HttpError } from "../http";
 import { isValidEmail, openExternal, safeExternalUrl } from "../safety";
 import {
 	buildEventPatch,
 	buildInsertBody,
+	buildRsvpPatch,
 	diffDraft,
 	draftFromEvent,
 	editabilityOf,
@@ -28,6 +29,7 @@ import {
 	type ChangeSet,
 	type DraftErrors,
 	type EventDraft,
+	type RsvpResponse,
 } from "../editing";
 import { confirmDelete } from "./prompts";
 
@@ -46,6 +48,12 @@ type Mode = "view" | "edit" | "create";
 
 const WRITE_ROLES = ["writer", "owner"];
 const NOT_SIGNED_IN = "This account isn't signed in on this device.";
+
+const RSVP_OPTIONS: Array<{ label: string; value: RsvpResponse }> = [
+	{ label: "Yes", value: "accepted" },
+	{ label: "Maybe", value: "tentative" },
+	{ label: "No", value: "declined" },
+];
 
 function responseIcon(response: string | undefined): string {
 	if (response === "accepted") return "check";
@@ -110,6 +118,7 @@ class EventModal extends Modal {
 	/** Overrides the editability reason after a 403. */
 	private viewReason: string | null = null;
 	/** The block is `editable: false`: no writes at all, not even RSVP. */
+	private readonly readOnly: boolean;
 
 	// Elements refreshed without a full re-render.
 	private titleRow: Setting | null = null;
@@ -133,6 +142,7 @@ class EventModal extends Modal {
 		init: { event: CalEvent; readOnly?: boolean } | { draft: EventDraft }
 	) {
 		super(ctx.app);
+		this.readOnly = "event" in init && init.readOnly === true;
 		if ("event" in init) {
 			this.event = init.event;
 			this.editability = this.computeEditability(init.event);
@@ -189,6 +199,7 @@ class EventModal extends Modal {
 		this.renderLocation(form);
 		this.renderGuests(form);
 		this.renderDescription(form);
+		if (this.event && this.editability.canRsvp && !this.readOnly) this.renderRsvp(form, this.event);
 		this.renderFooter(contentEl);
 		this.refresh();
 	}
@@ -407,6 +418,20 @@ class EventModal extends Modal {
 		});
 	}
 
+	private renderRsvp(parent: HTMLElement, event: CalEvent): void {
+		const row = new Setting(parent).setName("Going?");
+		const group = row.controlEl.createDiv({ cls: "cc-editor-rsvp", attr: { role: "group", "aria-label": "Your response" } });
+		for (const option of RSVP_OPTIONS) {
+			const active = event.selfResponse === option.value;
+			const button = group.createEl("button", {
+				text: option.label,
+				cls: active ? ["cc-editor-rsvp-option", "is-active"] : "cc-editor-rsvp-option",
+				attr: { type: "button", "aria-pressed": String(active) },
+			});
+			button.addEventListener("click", () => void this.rsvp(option.value));
+		}
+	}
+
 	private renderFooter(parent: HTMLElement): void {
 		const footer = parent.createDiv({ cls: ["modal-button-container", "cc-editor-footer"] });
 		this.deleteButton = null;
@@ -618,7 +643,42 @@ class EventModal extends Modal {
 		}
 	}
 
-	// --- Delete --------------------------------------------------------------------
+	// --- RSVP and delete ---------------------------------------------------------
+
+	private async rsvp(response: RsvpResponse): Promise<void> {
+		const event = this.event;
+		if (!event || this.busy) return;
+		const client = this.ctx.clientFor(event.accountId);
+		if (!client) {
+			this.showError(NOT_SIGNED_IN);
+			return;
+		}
+		this.setBusy(true);
+		try {
+			const raw = await client.patchEvent(event.calendarId, event.id, buildRsvpPatch(event, response), {
+				etag: event.etag,
+				sendUpdates: "none",
+			});
+			this.ctx.afterChange([event.calendarKey]);
+			const fresh = normaliseEvent(raw, calendarOf(this.ctx, event));
+			if (!fresh) {
+				this.finish();
+				return;
+			}
+			// Keep whatever the user has typed; only the event (and its etag) moves on.
+			const draft = this.draft;
+			this.event = fresh;
+			this.editability = this.computeEditability(fresh);
+			this.original = draftFromEvent(fresh);
+			this.draft = draft;
+			this.render();
+		} catch (error) {
+			if (isUncertain(error)) this.ctx.afterChange([event.calendarKey]);
+			this.showError(describeError(error));
+		} finally {
+			this.setBusy(false);
+		}
+	}
 
 	private async remove(): Promise<void> {
 		if (!this.event || this.busy) return;
@@ -655,6 +715,26 @@ export function openEventCreator(ctx: EditContext, opts: { start: Moment; calend
 	}
 	const draft = newDraft(opts.start, ctx.settings().defaultEventMinutes, calendar.key);
 	new EventModal(ctx, { draft }).open();
+}
+
+/** RSVP without opening the modal. */
+export async function respond(ctx: EditContext, event: CalEvent, response: "accepted" | "tentative" | "declined"): Promise<void> {
+	const client = ctx.clientFor(event.accountId);
+	if (!client) {
+		new Notice(NOT_SIGNED_IN);
+		return;
+	}
+	try {
+		await client.patchEvent(event.calendarId, event.id, buildRsvpPatch(event, response), {
+			etag: event.etag,
+			sendUpdates: "none",
+		});
+		ctx.afterChange([event.calendarKey]);
+	} catch (error) {
+		new Notice(`Couldn't send your response: ${describeError(error)}`);
+		// A conflict means our copy is stale; a network error means it may have gone through.
+		if (isUncertain(error) || isKind(error, "conflict")) ctx.afterChange([event.calendarKey]);
+	}
 }
 
 /** Confirm → delete. Resolves true when the event was deleted. */

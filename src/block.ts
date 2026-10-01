@@ -8,7 +8,7 @@ import type CalendarConnectPlugin from "./main";
 import { QueryError, parseQuery, resolveCalendars, type BlockQuery } from "./query";
 import { renderEvents, renderMessage, stateSignature, type BlockActions } from "./render";
 import type { CalEvent, Editability } from "./types";
-import { deleteWithPrompts, openEventCreator, openEventEditor } from "./ui/event-modal";
+import { deleteWithPrompts, openEventCreator, openEventEditor, respond } from "./ui/event-modal";
 
 const READ_ONLY: Editability = {
 	canEdit: false,
@@ -251,6 +251,7 @@ export class CalendarBlock extends MarkdownRenderChild {
 				const start = day.isSame(now, "day") ? nextSlot(now) : day.clone().startOf("day").add(9, "hours");
 				openEventCreator(ctx, { start, calendarKey: this.newEventCalendar(query) });
 			},
+			rsvp: (event, response) => void respond(ctx, event, response).catch(report),
 			remove: (event) => void deleteWithPrompts(ctx, event).catch(report),
 			refresh: () => this.refresh(),
 		};

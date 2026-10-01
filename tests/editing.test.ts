@@ -2,6 +2,7 @@ import { moment } from "../src/moment-shim";
 import {
 	buildEventPatch,
 	buildInsertBody,
+	buildRsvpPatch,
 	diffDraft,
 	draftFromEvent,
 	editabilityOf,
@@ -14,7 +15,7 @@ import {
 } from "../src/editing";
 import type { CalEvent, RawAttendee } from "../src/types";
 import { ACCOUNT, makeCalendar, makeEvent } from "./fixtures";
-import { check } from "./harness";
+import { check, throws } from "./harness";
 
 // moment runs in this machine's zone, so expected wall-time strings are built with it too.
 const local = (value: string) => moment(value, "YYYY-MM-DD HH:mm", true).format();
@@ -226,6 +227,24 @@ check(
 			attendees: [{ email: "bob@example.com" }],
 		}
 	);
+}
+
+// --- buildRsvpPatch --------------------------------------------------------------------
+{
+	const bob = { email: "bob@example.com", organizer: true, responseStatus: "accepted" };
+	const me = { email: ACCOUNT, self: true, displayName: "Alex", responseStatus: "needsAction", comment: "hi" };
+	const carol = { email: "carol@example.com", responseStatus: "tentative" };
+	const guestEvent = makeEvent({ organizerSelf: false, organizer: "bob@example.com", rawAttendees: [bob, me, carol] });
+	check("rsvp: full list with only my response changed", buildRsvpPatch(guestEvent, "accepted"), {
+		attendees: [bob, { ...me, responseStatus: "accepted" }, carol],
+	});
+	check("rsvp: original attendee objects are not mutated", me.responseStatus, "needsAction");
+	check(
+		"rsvp: attendeesOmitted form",
+		buildRsvpPatch(makeEvent({ organizerSelf: false, attendeesOmitted: true, rawAttendees: [me] }), "declined"),
+		{ attendeesOmitted: true, attendees: [{ email: ACCOUNT, responseStatus: "declined" }] }
+	);
+	throws("rsvp: throws without a self attendee", () => buildRsvpPatch(makeEvent({ rawAttendees: [bob] }), "accepted"));
 }
 
 // --- editabilityOf -----------------------------------------------------------------------
