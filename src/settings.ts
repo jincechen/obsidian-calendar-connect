@@ -26,6 +26,8 @@ export interface CalendarConnectSettings {
 	knownCalendars: CalendarInfo[];
 	/** Calendar keys (`accountId::calendarId`) queried when a block names none. Empty = all. */
 	defaultCalendars: string[];
+	/** Calendar key that "+ New event" uses. Empty = the first writable primary calendar. */
+	newEventCalendar: string;
 
 	defaultView: ViewMode;
 	defaultPeriod: string;
@@ -37,6 +39,9 @@ export interface CalendarConnectSettings {
 	/** Title patterns hidden in every block. Globs, or /regex/. */
 	hiddenTitles: string[];
 	descriptionLength: number;
+
+	/** Length of a new event, in minutes. */
+	defaultEventMinutes: number;
 
 	/** Seconds an API response stays reusable. */
 	cacheTtl: number;
@@ -52,6 +57,7 @@ export const DEFAULT_SETTINGS: CalendarConnectSettings = {
 
 	knownCalendars: [],
 	defaultCalendars: [],
+	newEventCalendar: "",
 
 	defaultView: "list",
 	defaultPeriod: "1d",
@@ -62,6 +68,8 @@ export const DEFAULT_SETTINGS: CalendarConnectSettings = {
 	pastEvents: "dim",
 	hiddenTitles: [],
 	descriptionLength: 200,
+
+	defaultEventMinutes: 30,
 
 	cacheTtl: 300,
 	autoRefresh: 0,
@@ -177,6 +185,7 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 
 		knownCalendars,
 		defaultCalendars: strings(data.defaultCalendars),
+		newEventCalendar: str(data.newEventCalendar, d.newEventCalendar),
 
 		defaultView: oneOf(data.defaultView, ["list", "agenda", "table"] as const, d.defaultView),
 		defaultPeriod: str(data.defaultPeriod, d.defaultPeriod).trim() || d.defaultPeriod,
@@ -187,6 +196,8 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 		pastEvents: oneOf(data.pastEvents, ["show", "dim", "hide"] as const, d.pastEvents),
 		hiddenTitles: strings(data.hiddenTitles).map((line) => line.trim()).filter(Boolean),
 		descriptionLength: num(data.descriptionLength, d.descriptionLength, 0, 10000),
+
+		defaultEventMinutes: num(data.defaultEventMinutes, d.defaultEventMinutes, 5, 24 * 60),
 
 		cacheTtl: num(data.cacheTtl, d.cacheTtl, 0, 24 * 3600),
 		autoRefresh: autoRefresh === 0 ? 0 : Math.max(MIN_AUTO_REFRESH, autoRefresh),

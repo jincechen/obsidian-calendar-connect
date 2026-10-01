@@ -71,6 +71,10 @@
 	font-variant-numeric: tabular-nums;
 }
 
+.cc-day-add {
+	margin-left: auto;
+}
+
 .cc-block .cc-rows {
 	margin: 0;
 	padding: 0;
@@ -607,6 +611,31 @@
 
 .cc-footer-spacer {
 	flex: 1 1 auto;
+}
+
+.cc-block button.cc-new-event {
+	--icon-size: var(--icon-xs);
+	display: inline-flex;
+	align-items: center;
+	gap: var(--size-2-2);
+	height: auto;
+	padding: var(--size-2-1) var(--size-4-1);
+	border: none;
+	border-radius: var(--clickable-icon-radius);
+	background: transparent;
+	box-shadow: none;
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	cursor: pointer;
+}
+
+.cc-block button.cc-new-event:hover {
+	background: var(--background-modifier-hover);
+	color: var(--text-normal);
+}
+
+.cc-new-event-icon {
+	display: inline-flex;
 }
 
 .cc-updated {

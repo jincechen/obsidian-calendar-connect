@@ -167,6 +167,17 @@ export function formatDuration(start: Moment, end: Moment, allDay: boolean): str
 	return `${hours}h ${minutes}m`;
 }
 
+/** The first `minutes` boundary strictly after `now` (09:10 → 09:30, 09:30 → 10:00), seconds zeroed. */
+export function nextSlot(now: Moment, minutes = 30): Moment {
+	const step = Math.max(1, Math.floor(minutes));
+	const minute = now.clone().startOf("minute");
+	const ofDay = minute.hour() * 60 + minute.minute();
+	const next = (Math.floor(ofDay / step) + 1) * step;
+	// Added to the current minute rather than midnight, so a DST change earlier
+	// in the day does not shift the result by an hour.
+	return minute.add(next - ofDay, "minutes");
+}
+
 export type TimeState = "past" | "now" | "future";
 
 /**

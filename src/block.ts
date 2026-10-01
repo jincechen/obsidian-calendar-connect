@@ -1,13 +1,14 @@
 import { MarkdownRenderChild } from "obsidian";
 import { moment, type Moment } from "./moment-shim";
 import { AuthError } from "./auth";
+import { nextSlot } from "./dates";
 import { editabilityOf } from "./editing";
 import { describeError } from "./google";
 import type CalendarConnectPlugin from "./main";
-import { QueryError, parseQuery, type BlockQuery } from "./query";
+import { QueryError, parseQuery, resolveCalendars, type BlockQuery } from "./query";
 import { renderEvents, renderMessage, stateSignature, type BlockActions } from "./render";
 import type { CalEvent, Editability } from "./types";
-import { openEventEditor } from "./ui/event-modal";
+import { openEventCreator, openEventEditor } from "./ui/event-modal";
 
 const READ_ONLY: Editability = {
 	canEdit: false,
@@ -242,7 +243,24 @@ export class CalendarBlock extends MarkdownRenderChild {
 					? editabilityOf(event, plugin.calendar(event.calendarKey), plugin.canWrite(event.accountId))
 					: { ...READ_ONLY },
 			open: (event) => openEventEditor(ctx, event, { readOnly: !query.editable }),
+			canCreate: () =>
+				query.controls && query.newEventCalendar !== false && query.editable && plugin.writableCalendars().length > 0,
+			create: (day) => {
+				const now = moment();
+				const start = day.isSame(now, "day") ? nextSlot(now) : day.clone().startOf("day").add(9, "hours");
+				openEventCreator(ctx, { start, calendarKey: this.newEventCalendar(query) });
+			},
 			refresh: () => this.refresh(),
 		};
+	}
+
+	/** The block's `new-event` term resolved to a writable calendar, else the setting. */
+	private newEventCalendar(query: BlockQuery): string | undefined {
+		const fallback = this.plugin.settings.newEventCalendar || undefined;
+		const term = query.newEventCalendar;
+		if (typeof term !== "string" || !term.trim()) return fallback;
+		const writable = this.plugin.writableCalendars();
+		const { matched } = resolveCalendars([term], this.plugin.settings.knownCalendars);
+		return matched.find((key) => writable.some((calendar) => calendar.key === key)) ?? fallback;
 	}
 }

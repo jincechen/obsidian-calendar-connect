@@ -1,11 +1,13 @@
 /**
- * The event editor: one modal with two modes.
+ * The event editor: one modal with three modes.
  *  - view:   everything disabled, with a banner saying why
  *  - edit:   an existing event the account may change
+ *  - create: a new event
  * Writes are never optimistic and never retried automatically: on success the
  * affected calendars are invalidated and every block re-renders from Google.
  */
 import { App, ButtonComponent, DropdownComponent, Modal, Notice, Setting, TextComponent, setIcon } from "obsidian";
+import type { Moment } from "../moment-shim";
 import type { CalendarConnectSettings } from "../settings";
 import type { CalEvent, CalendarInfo, Editability } from "../types";
 import { CalendarApiError, describeError, type GoogleCalendarClient, type SendUpdates } from "../google";
@@ -13,9 +15,12 @@ import { HttpError } from "../http";
 import { isValidEmail, openExternal, safeExternalUrl } from "../safety";
 import {
 	buildEventPatch,
+	buildInsertBody,
 	diffDraft,
 	draftFromEvent,
 	editabilityOf,
+	newDraft,
+	newEventId,
 	normaliseEmail,
 	pickTimeZone,
 	validateDraft,
@@ -36,7 +41,7 @@ export interface EditContext {
 	afterChange(calendarKeys: string[]): void;
 }
 
-type Mode = "view" | "edit";
+type Mode = "view" | "edit" | "create";
 
 const WRITE_ROLES = ["writer", "owner"];
 const NOT_SIGNED_IN = "This account isn't signed in on this device.";
@@ -123,14 +128,21 @@ class EventModal extends Modal {
 
 	constructor(
 		private readonly ctx: EditContext,
-		init: { event: CalEvent; readOnly?: boolean }
+		init: { event: CalEvent; readOnly?: boolean } | { draft: EventDraft }
 	) {
 		super(ctx.app);
-		this.event = init.event;
-		this.editability = this.computeEditability(init.event);
-		this.mode = !init.readOnly && this.editability.canEdit ? "edit" : "view";
-		if (init.readOnly && !this.editability.reason) this.viewReason = "This block is read-only";
-		this.original = draftFromEvent(init.event);
+		if ("event" in init) {
+			this.event = init.event;
+			this.editability = this.computeEditability(init.event);
+			this.mode = !init.readOnly && this.editability.canEdit ? "edit" : "view";
+			if (init.readOnly && !this.editability.reason) this.viewReason = "This block is read-only";
+			this.original = draftFromEvent(init.event);
+		} else {
+			this.event = null;
+			this.editability = { canEdit: true, canDelete: false, canMove: true, canRsvp: false };
+			this.mode = "create";
+			this.original = init.draft;
+		}
 		this.draft = { ...this.original, guests: [...this.original.guests] };
 		this.scope.register(["Mod"], "Enter", (evt) => {
 			evt.preventDefault();
@@ -162,7 +174,7 @@ class EventModal extends Modal {
 		const { contentEl } = this;
 		contentEl.empty();
 		this.timeInputs = [];
-		this.setTitle(this.mode === "edit" ? "Edit event" : "Event");
+		this.setTitle(this.mode === "create" ? "New event" : this.mode === "edit" ? "Edit event" : "Event");
 		this.modalEl.toggleClass("is-read-only", !this.editable);
 
 		if (this.mode === "view") this.renderBanner(contentEl);
@@ -208,6 +220,11 @@ class EventModal extends Modal {
 	/** Calendars this modal may offer, as `key → label`. */
 	private calendarChoices(): Array<{ key: string; label: string }> {
 		const all = this.ctx.calendars();
+		if (this.mode === "create") {
+			return all
+				.filter((c) => isWritableCalendar(this.ctx, c))
+				.map((c) => ({ key: c.key, label: `${c.accountLabel} · ${c.name}` }));
+		}
 		const event = this.event as CalEvent;
 		const choices = all
 			.filter((c) => c.accountId === event.accountId && (c.key === event.calendarKey || isWritableCalendar(this.ctx, c)))
@@ -218,7 +235,7 @@ class EventModal extends Modal {
 
 	private renderCalendar(parent: HTMLElement): void {
 		const choices = this.calendarChoices();
-		const canChange = this.mode === "edit" && this.editability.canMove;
+		const canChange = this.mode === "create" || (this.mode === "edit" && this.editability.canMove);
 		const row = new Setting(parent).setName("Calendar").addDropdown((dropdown: DropdownComponent) => {
 			for (const choice of choices) dropdown.addOption(choice.key, choice.label);
 			dropdown.setValue(this.draft.calendarKey);
@@ -398,7 +415,7 @@ class EventModal extends Modal {
 		new ButtonComponent(footer).setButtonText(this.editable ? "Cancel" : "Close").onClick(() => this.close());
 		if (this.editable) {
 			this.saveButton = new ButtonComponent(footer)
-				.setButtonText("Save")
+				.setButtonText(this.mode === "create" ? "Create" : "Save")
 				.setCta()
 				.onClick(() => void this.save());
 		}
@@ -420,7 +437,7 @@ class EventModal extends Modal {
 		this.descriptionRow?.setDesc(flattened ? "Saving replaces rich formatting with plain text" : "");
 		const invalid = Object.keys(e).length > 0;
 		this.saveButton?.setDisabled(invalid || this.busy);
-		this.saveButton?.setButtonText(this.busy ? "Saving…" : "Save");
+		this.saveButton?.setButtonText(this.busy ? "Saving…" : this.mode === "create" ? "Create" : "Save");
 		this.modalEl.toggleClass("is-busy", this.busy);
 	}
 
@@ -460,6 +477,7 @@ class EventModal extends Modal {
 		this.refresh();
 		if (Object.keys(this.errors).length) return;
 		this.showError(null);
+		if (this.mode === "create") return this.create();
 
 		const event = this.event as CalEvent;
 		const changes = diffDraft(this.original, this.draft);
@@ -564,9 +582,55 @@ class EventModal extends Modal {
 		this.finish();
 	}
 
+	private async create(): Promise<void> {
+		const calendar = this.ctx.calendars().find((c) => c.key === this.draft.calendarKey);
+		if (!calendar) {
+			this.showError("Choose a calendar for the event.");
+			return;
+		}
+		const client = this.ctx.clientFor(calendar.accountId);
+		if (!client) {
+			this.showError(NOT_SIGNED_IN);
+			return;
+		}
+		const sendUpdates: SendUpdates = "none";
+		this.setBusy(true);
+		try {
+			const body = buildInsertBody(this.draft, pickTimeZone(undefined, calendar), newEventId());
+			await client.insertEvent(calendar.id, body, { sendUpdates });
+			this.succeed([calendar.key], "Event created");
+		} catch (error) {
+			if (isUncertain(error)) this.uncertain([calendar.key]);
+			else this.showError(describeError(error));
+		} finally {
+			this.setBusy(false);
+		}
+	}
+
 }
 
 /** View (readOnly or not editable) or edit an existing event. */
 export function openEventEditor(ctx: EditContext, event: CalEvent, opts: { readOnly?: boolean } = {}): void {
 	new EventModal(ctx, { event, readOnly: opts.readOnly }).open();
+}
+
+/** The calendar a new event goes to: the requested one, the setting, then the first writable primary. */
+function creationCalendar(ctx: EditContext, requested: string | undefined): CalendarInfo | undefined {
+	const writable = ctx.calendars().filter((c) => isWritableCalendar(ctx, c));
+	for (const key of [requested, ctx.settings().newEventCalendar]) {
+		const found = key ? writable.find((c) => c.key === key) : undefined;
+		if (found) return found;
+	}
+	return writable.find((c) => c.primary) ?? writable[0];
+}
+
+/** Create mode. `calendarKey` preselects; falls back to settings.newEventCalendar, then first writable primary. */
+export function openEventCreator(ctx: EditContext, opts: { start: Moment; calendarKey?: string }): void {
+	const calendar = creationCalendar(ctx, opts.calendarKey);
+	if (!calendar) {
+		new Notice("No calendar you can add events to. Connect an account with editing enabled.");
+		return;
+	}
+	const draft = newDraft(opts.start, ctx.settings().defaultEventMinutes, calendar.key);
+	new EventModal(ctx, { draft }).open();
 }

@@ -21,6 +21,9 @@ export interface BlockActions {
 	editability(event: CalEvent): Editability;
 	/** Editor or read-only viewer. */
 	open(event: CalEvent): void;
+	canCreate(): boolean;
+	/** `day` is the start of the day to create on. */
+	create(day: Moment): void;
 	refresh(): void;
 }
 
@@ -124,6 +127,10 @@ export function stateSignature(events: CalEvent[], query: BlockQuery, now: Momen
 
 function editabilityFor(event: CalEvent, query: BlockQuery, actions: BlockActions): Editability {
 	return query.editable ? actions.editability(event) : READ_ONLY;
+}
+
+function canCreate(query: BlockQuery, actions: BlockActions): boolean {
+	return query.editable && query.newEventCalendar !== false && actions.canCreate();
 }
 
 function setColor(el: HTMLElement, event: CalEvent): void {
@@ -340,10 +347,22 @@ function createNowLine(parent: HTMLElement, tag: "li" | "div"): void {
 	line.createSpan({ cls: "cc-now-rule" });
 }
 
-function dayHeader(parent: HTMLElement, cls: string, day: Moment, count: number, query: BlockQuery): void {
+function dayHeader(
+	parent: HTMLElement,
+	cls: string,
+	day: Moment,
+	count: number,
+	query: BlockQuery,
+	actions: BlockActions
+): void {
 	const header = parent.createDiv({ cls });
 	header.createSpan({ cls: "cc-day-label", text: dayHeading(day, query.dateHeadingFormat) });
 	header.createSpan({ cls: "cc-day-count", text: String(count) });
+	if (canCreate(query, actions)) {
+		iconButton(header, "cc-day-add", "plus", `New event on ${day.format("dddd D MMMM")}`, () =>
+			actions.create(day.clone().startOf("day"))
+		);
+	}
 }
 
 // --- List view ---------------------------------------------------------------
@@ -463,7 +482,7 @@ function renderList(container: HTMLElement, events: CalEvent[], query: BlockQuer
 		const section = container.createDiv({ cls: "cc-day" });
 		section.toggleClass("is-today", isToday);
 		section.toggleClass("is-past-day", bucket.day.isBefore(today, "day"));
-		if (multiDay) dayHeader(section, "cc-day-header", bucket.day, bucket.items.length, query);
+		if (multiDay) dayHeader(section, "cc-day-header", bucket.day, bucket.items.length, query, options.actions);
 
 		const list = section.createEl("ul", { cls: "cc-rows" });
 		const lineAt = query.highlightNow && isToday ? nowLineIndex(bucket.items, view) : -1;
@@ -530,7 +549,7 @@ function renderAgenda(container: HTMLElement, events: CalEvent[], query: BlockQu
 		const isToday = bucket.day.isSame(today, "day");
 		const section = container.createDiv({ cls: "cc-group" });
 		section.toggleClass("is-today", isToday);
-		dayHeader(section, "cc-group-heading cc-day-header", bucket.day, bucket.items.length, query);
+		dayHeader(section, "cc-group-heading cc-day-header", bucket.day, bucket.items.length, query, options.actions);
 
 		const list = section.createDiv({ cls: "cc-agenda" });
 		const lineAt = query.highlightNow && isToday ? nowLineIndex(bucket.items, view) : -1;
@@ -622,8 +641,24 @@ function renderTable(container: HTMLElement, events: CalEvent[], query: BlockQue
 
 // --- Block chrome ------------------------------------------------------------
 
-function renderFooter(container: HTMLElement, options: RenderOptions): void {
+/** Where "+ New event" creates: today when it is in range, otherwise the first day shown. */
+function defaultCreateDay(query: BlockQuery, now: Moment): Moment {
+	const today = now.clone().startOf("day");
+	const inRange = !today.isBefore(query.from, "day") && !today.isAfter(query.to, "day");
+	return inRange ? today : query.from.clone().startOf("day");
+}
+
+function renderFooter(container: HTMLElement, query: BlockQuery, options: RenderOptions): void {
 	const footer = container.createDiv({ cls: "cc-footer" });
+	if (canCreate(query, options.actions)) {
+		const button = footer.createEl("button", { cls: "cc-new-event" });
+		setIcon(button.createSpan({ cls: "cc-new-event-icon" }), "plus");
+		button.createSpan({ text: "New event" });
+		button.addEventListener("click", (mouse) => {
+			mouse.preventDefault();
+			options.actions.create(defaultCreateDay(query, options.now));
+		});
+	}
 	footer.createSpan({ cls: "cc-footer-spacer" });
 	if (options.lastUpdated) {
 		footer.createSpan({ cls: "cc-updated", text: `Updated ${options.lastUpdated.fromNow()}` });
@@ -656,7 +691,7 @@ export function renderEvents(container: HTMLElement, events: CalEvent[], query: 
 				: renderList(container, shown, query, options));
 	if (!drawn) container.createDiv({ cls: "cc-empty", text: query.emptyMessage });
 
-	if (query.controls) renderFooter(container, options);
+	if (query.controls) renderFooter(container, query, options);
 }
 
 export function renderMessage(

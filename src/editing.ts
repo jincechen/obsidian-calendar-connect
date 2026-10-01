@@ -5,7 +5,7 @@
  */
 import { moment, type Moment } from "./moment-shim";
 import { isValidEmail } from "./safety";
-import type { CalEvent, CalendarInfo, Editability, RawAttendee, RawEventDate } from "./types";
+import type { CalEvent, CalendarInfo, Editability, RawAttendee, RawEvent, RawEventDate } from "./types";
 
 const DATE = "YYYY-MM-DD";
 const TIME = "HH:mm";
@@ -89,6 +89,23 @@ export function draftFromEvent(event: CalEvent): EventDraft {
 		description: event.description ?? "",
 		guests,
 		calendarKey: event.calendarKey,
+	};
+}
+
+/** A timed draft lasting `minutes` from `start`. */
+export function newDraft(start: Moment, minutes: number, calendarKey: string): EventDraft {
+	const end = start.clone().add(minutes, "minutes");
+	return {
+		title: "",
+		allDay: false,
+		startDate: start.format(DATE),
+		startTime: start.format(TIME),
+		endDate: end.format(DATE),
+		endTime: end.format(TIME),
+		location: "",
+		description: "",
+		guests: [],
+		calendarKey,
 	};
 }
 
@@ -260,4 +277,29 @@ export function buildEventPatch(event: CalEvent, draft: EventDraft, changes: Cha
 	const patch = textFields(draft, changes, event.rawAttendees);
 	if (changes.time) Object.assign(patch, draftTimes(draft, timeZone, event.rawStart.timeZone));
 	return patch;
+}
+
+/** Body for `events.insert`. The client-generated `id` makes a retried insert harmless. */
+export function buildInsertBody(draft: EventDraft, timeZone: string, id: string): RawEvent {
+	const body: RawEvent = { id, summary: draft.title };
+	if (draft.location) body.location = draft.location;
+	if (draft.description) body.description = draft.description;
+	if (draft.allDay) {
+		body.start = { date: draft.startDate };
+		body.end = { date: nextDay(draft.endDate) };
+	} else {
+		body.start = { dateTime: draftStart(draft).format(), timeZone };
+		body.end = { dateTime: draftEnd(draft).format(), timeZone };
+	}
+	if (draft.guests.length) body.attendees = draft.guests.map((email) => ({ email }));
+	return body;
+}
+
+const ID_ALPHABET = "0123456789abcdefghijklmnopqrstuv";
+
+/** A Google-valid event id (base32hex, 26 chars ≈ 130 bits). */
+export function newEventId(rand: () => number = Math.random): string {
+	let id = "";
+	for (let i = 0; i < 26; i++) id += ID_ALPHABET[Math.floor(rand() * ID_ALPHABET.length) % ID_ALPHABET.length];
+	return id;
 }

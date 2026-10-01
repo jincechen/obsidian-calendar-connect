@@ -27,6 +27,7 @@ check("no warnings", plain.warnings, []);
 check("past defaults to the setting", plain.query.past, "dim");
 check("now defaults on", plain.query.highlightNow, true);
 check("controls default on", plain.query.controls, true);
+check("new-event defaults to the setting", plain.query.newEventCalendar, undefined);
 check("editable by default", plain.query.editable, true);
 check("refresh defaults to the setting", plain.query.refresh, 0);
 check("all-day included", plain.query.allDay, "include");
@@ -94,7 +95,7 @@ check("all_day snake case", parseQuery("all_day: exclude", base).query.allDay, "
 check("ALL-DAY upper case", parseQuery("ALL-DAY: only", base).query.allDay, "only");
 check("hideTitles camelCase", parseQuery("hideTitles: EOD", base).query.hiddenTitles.length, 1);
 check("time_format snake case", parseQuery("time_format: 12h", base).query.use24HourTime, false);
-check("normalised keys do not warn", parseQuery("allDay: exclude\nhide_titles: EOD", base).warnings, []);
+check("normalised keys do not warn", parseQuery("allDay: exclude\nhide_titles: EOD\nNew Event: Work", base).warnings, []);
 
 // ---- options ----
 check("past: show", parseQuery("past: show", base).query.past, "show");
@@ -105,6 +106,12 @@ check("now: false", parseQuery("now: false", base).query.highlightNow, false);
 check("now: off", parseQuery("now: off", base).query.highlightNow, false);
 throws("bad now", () => parseQuery("now: sometimes", base));
 check("controls: false", parseQuery("controls: false", base).query.controls, false);
+check("new-event: false", parseQuery("new-event: false", base).query.newEventCalendar, false);
+check("new-event: no", parseQuery("new-event: no", base).query.newEventCalendar, false);
+check("new-event: off", parseQuery("new-event: off", base).query.newEventCalendar, false);
+check("new-event: term", parseQuery("new-event: Work", base).query.newEventCalendar, "Work");
+check("new-event: account/calendar", parseQuery("new-event: work/Clinic rota", base).query.newEventCalendar, "work/Clinic rota");
+check("new-event: true defers to setting", parseQuery("new-event: true", base).query.newEventCalendar, undefined);
 check("editable: false", parseQuery("editable: false", base).query.editable, false);
 throws("bad editable", () => parseQuery("editable: perhaps", base));
 check("time-format 24h", parseQuery("time-format: 24h", { ...base, use24HourTime: false }).query.use24HourTime, true);

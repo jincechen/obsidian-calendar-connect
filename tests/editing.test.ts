@@ -1,9 +1,12 @@
 import { moment } from "../src/moment-shim";
 import {
 	buildEventPatch,
+	buildInsertBody,
 	diffDraft,
 	draftFromEvent,
 	editabilityOf,
+	newDraft,
+	newEventId,
 	pickTimeZone,
 	validateDraft,
 	withStart,
@@ -61,6 +64,18 @@ check(
 	draftFromEvent(makeEvent({ rawAttendees: [{ email: " Bob@Example.com" }, { email: "bob@example.com" }, { displayName: "No email" }] })).guests,
 	["bob@example.com"]
 );
+check("newDraft: timed, default length", newDraft(moment("2026-08-14T23:45"), 30, "k"), {
+	title: "",
+	allDay: false,
+	startDate: "2026-08-14",
+	startTime: "23:45",
+	endDate: "2026-08-15",
+	endTime: "00:15",
+	location: "",
+	description: "",
+	guests: [],
+	calendarKey: "k",
+});
 
 // --- withStart -------------------------------------------------------------------
 {
@@ -185,6 +200,34 @@ check(
 	});
 }
 
+// --- buildInsertBody -----------------------------------------------------------------
+{
+	const draft = newDraft(moment("2026-08-14T14:00"), 45, "k");
+	check("insert: timed", buildInsertBody({ ...draft, title: "Call" }, TZ, "abc12345"), {
+		id: "abc12345",
+		summary: "Call",
+		start: { dateTime: local("2026-08-14 14:00"), timeZone: TZ },
+		end: { dateTime: local("2026-08-14 14:45"), timeZone: TZ },
+	});
+	check(
+		"insert: all-day with location, description and guests",
+		buildInsertBody(
+			{ ...draft, title: "Trip", allDay: true, endDate: "2026-08-16", location: "Rome", description: "Bring passport", guests: ["bob@example.com"] },
+			TZ,
+			"id2"
+		),
+		{
+			id: "id2",
+			summary: "Trip",
+			location: "Rome",
+			description: "Bring passport",
+			start: { date: "2026-08-14" },
+			end: { date: "2026-08-17" },
+			attendees: [{ email: "bob@example.com" }],
+		}
+	);
+}
+
 // --- editabilityOf -----------------------------------------------------------------------
 {
 	const owner = makeCalendar();
@@ -241,6 +284,16 @@ check(
 		false,
 		false,
 	]);
+}
+
+// --- newEventId --------------------------------------------------------------------------
+{
+	const ids = Array.from({ length: 1000 }, () => newEventId());
+	check("newEventId: 26 chars", ids.every((id) => id.length === 26), true);
+	check("newEventId: base32hex charset", ids.every((id) => /^[0-9a-v]+$/.test(id)), true);
+	check("newEventId: 1000 unique", new Set(ids).size, 1000);
+	check("newEventId: rand 0", newEventId(() => 0), "0".repeat(26));
+	check("newEventId: rand just below 1", newEventId(() => 0.999999999), "v".repeat(26));
 }
 
 // --- pickTimeZone ------------------------------------------------------------------------
