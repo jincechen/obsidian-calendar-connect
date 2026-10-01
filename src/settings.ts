@@ -42,6 +42,7 @@ export interface CalendarConnectSettings {
 
 	/** Length of a new event, in minutes. */
 	defaultEventMinutes: number;
+	confirmDelete: boolean;
 
 	/** Seconds an API response stays reusable. */
 	cacheTtl: number;
@@ -70,6 +71,7 @@ export const DEFAULT_SETTINGS: CalendarConnectSettings = {
 	descriptionLength: 200,
 
 	defaultEventMinutes: 30,
+	confirmDelete: true,
 
 	cacheTtl: 300,
 	autoRefresh: 0,
@@ -198,6 +200,7 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 		descriptionLength: num(data.descriptionLength, d.descriptionLength, 0, 10000),
 
 		defaultEventMinutes: num(data.defaultEventMinutes, d.defaultEventMinutes, 5, 24 * 60),
+		confirmDelete: bool(data.confirmDelete, d.confirmDelete),
 
 		cacheTtl: num(data.cacheTtl, d.cacheTtl, 0, 24 * 3600),
 		autoRefresh: autoRefresh === 0 ? 0 : Math.max(MIN_AUTO_REFRESH, autoRefresh),

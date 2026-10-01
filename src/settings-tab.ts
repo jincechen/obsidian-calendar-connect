@@ -448,6 +448,7 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 							Number.isFinite(value) && value >= 5 && value <= 24 * 60 ? undefined : "Use 5 to 1440 minutes.",
 					},
 				},
+				{ name: "Confirm before deleting", control: { type: "toggle", key: "confirmDelete" } },
 			],
 		};
 	}

@@ -24,6 +24,7 @@ export interface BlockActions {
 	canCreate(): boolean;
 	/** `day` is the start of the day to create on. */
 	create(day: Moment): void;
+	remove(event: CalEvent): void;
 	refresh(): void;
 }
 
@@ -264,6 +265,17 @@ function showEventMenu(
 			.setIcon("clipboard-list")
 			.onClick(() => copyText(`- ${timeText(event, query)} ${markdownInline(event.title)}`, "Event"))
 	);
+
+	if (editability.canDelete) {
+		menu.addSeparator();
+		menu.addItem((item) =>
+			item
+				.setTitle("Delete")
+				.setIcon("trash-2")
+				.setWarning(true)
+				.onClick(() => actions.remove(event))
+		);
+	}
 
 	if (at instanceof HTMLElement) {
 		const rect = at.getBoundingClientRect();

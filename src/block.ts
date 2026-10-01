@@ -1,4 +1,4 @@
-import { MarkdownRenderChild } from "obsidian";
+import { MarkdownRenderChild, Notice } from "obsidian";
 import { moment, type Moment } from "./moment-shim";
 import { AuthError } from "./auth";
 import { nextSlot } from "./dates";
@@ -8,7 +8,7 @@ import type CalendarConnectPlugin from "./main";
 import { QueryError, parseQuery, resolveCalendars, type BlockQuery } from "./query";
 import { renderEvents, renderMessage, stateSignature, type BlockActions } from "./render";
 import type { CalEvent, Editability } from "./types";
-import { openEventCreator, openEventEditor } from "./ui/event-modal";
+import { deleteWithPrompts, openEventCreator, openEventEditor } from "./ui/event-modal";
 
 const READ_ONLY: Editability = {
 	canEdit: false,
@@ -236,6 +236,7 @@ export class CalendarBlock extends MarkdownRenderChild {
 	private actions(query: BlockQuery): BlockActions {
 		const plugin = this.plugin;
 		const ctx = plugin.editContext;
+		const report = (error: unknown) => new Notice(`Google Calendar: ${describeError(error)}`, 10000);
 
 		return {
 			editability: (event) =>
@@ -250,6 +251,7 @@ export class CalendarBlock extends MarkdownRenderChild {
 				const start = day.isSame(now, "day") ? nextSlot(now) : day.clone().startOf("day").add(9, "hours");
 				openEventCreator(ctx, { start, calendarKey: this.newEventCalendar(query) });
 			},
+			remove: (event) => void deleteWithPrompts(ctx, event).catch(report),
 			refresh: () => this.refresh(),
 		};
 	}

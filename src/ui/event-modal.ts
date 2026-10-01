@@ -29,6 +29,7 @@ import {
 	type DraftErrors,
 	type EventDraft,
 } from "../editing";
+import { confirmDelete } from "./prompts";
 
 export interface EditContext {
 	app: App;
@@ -125,6 +126,7 @@ class EventModal extends Modal {
 	private chipsEl: HTMLElement | null = null;
 	private errorEl: HTMLElement | null = null;
 	private saveButton: ButtonComponent | null = null;
+	private deleteButton: ButtonComponent | null = null;
 
 	constructor(
 		private readonly ctx: EditContext,
@@ -407,7 +409,15 @@ class EventModal extends Modal {
 
 	private renderFooter(parent: HTMLElement): void {
 		const footer = parent.createDiv({ cls: ["modal-button-container", "cc-editor-footer"] });
+		this.deleteButton = null;
 		this.saveButton = null;
+		if (this.mode === "edit" && this.editability.canDelete) {
+			this.deleteButton = new ButtonComponent(footer)
+				.setButtonText("Delete")
+				.setDestructive()
+				.setClass("cc-editor-delete")
+				.onClick(() => void this.remove());
+		}
 		const link = safeExternalUrl(this.event?.link);
 		if (link) {
 			new ButtonComponent(footer).setButtonText("Open in Google Calendar").onClick(() => openExternal(link));
@@ -438,6 +448,7 @@ class EventModal extends Modal {
 		const invalid = Object.keys(e).length > 0;
 		this.saveButton?.setDisabled(invalid || this.busy);
 		this.saveButton?.setButtonText(this.busy ? "Saving…" : this.mode === "create" ? "Create" : "Save");
+		this.deleteButton?.setDisabled(this.busy);
 		this.modalEl.toggleClass("is-busy", this.busy);
 	}
 
@@ -607,6 +618,17 @@ class EventModal extends Modal {
 		}
 	}
 
+	// --- Delete --------------------------------------------------------------------
+
+	private async remove(): Promise<void> {
+		if (!this.event || this.busy) return;
+		this.setBusy(true);
+		try {
+			if (await deleteFlow(this.ctx, this.event)) this.finish();
+		} finally {
+			this.setBusy(false);
+		}
+	}
 }
 
 /** View (readOnly or not editable) or edit an existing event. */
@@ -633,4 +655,37 @@ export function openEventCreator(ctx: EditContext, opts: { start: Moment; calend
 	}
 	const draft = newDraft(opts.start, ctx.settings().defaultEventMinutes, calendar.key);
 	new EventModal(ctx, { draft }).open();
+}
+
+/** Confirm → delete. Resolves true when the event was deleted. */
+async function deleteFlow(ctx: EditContext, event: CalEvent): Promise<boolean> {
+	const { app } = ctx;
+	if (ctx.settings().confirmDelete && !(await confirmDelete(app, event.title))) return false;
+
+	const sendUpdates: SendUpdates = "none";
+
+	const client = ctx.clientFor(event.accountId);
+	if (!client) {
+		new Notice(NOT_SIGNED_IN);
+		return false;
+	}
+	try {
+		await client.deleteEvent(event.calendarId, event.id, { sendUpdates });
+	} catch (error) {
+		if (isUncertain(error)) {
+			new Notice("Couldn't confirm the delete — refreshing to check");
+			ctx.afterChange([event.calendarKey]);
+			return true;
+		}
+		new Notice(`Couldn't delete the event: ${describeError(error)}`);
+		return false;
+	}
+	ctx.afterChange([event.calendarKey]);
+	new Notice("Event deleted");
+	return true;
+}
+
+/** Delete with a confirm prompt. */
+export async function deleteWithPrompts(ctx: EditContext, event: CalEvent): Promise<void> {
+	await deleteFlow(ctx, event);
 }

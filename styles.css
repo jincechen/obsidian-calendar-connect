@@ -851,9 +851,23 @@
 	gap: var(--size-4-2);
 }
 
+.cc-editor-footer .cc-editor-delete {
+	margin-right: auto;
+}
+
 .cc-editor.is-busy .cc-editor-form {
 	opacity: 0.6;
 	pointer-events: none;
+}
+
+.cc-editor-prompt-message {
+	margin-top: 0;
+}
+
+.cc-editor-prompt-hint {
+	margin-top: var(--size-2-3);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
 }
 
 .is-mobile .cc-editor {
