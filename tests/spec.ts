@@ -5,6 +5,7 @@ import "./query.test";
 import "./settings.test";
 import "./store.test";
 import "./safety.test";
+import "./editing.test";
 import "./http.test";
 import "./auth.test";
 import "./google.test";

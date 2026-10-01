@@ -110,6 +110,7 @@ export interface Attendee {
 export interface CalEvent {
 	/** Google's event id (an instance id for an occurrence of a recurring event). */
 	id: string;
+	etag?: string;
 	calendarKey: string;
 	calendarId: string;
 	calendarName: string;
@@ -123,17 +124,43 @@ export interface CalEvent {
 	end: Moment;
 	allDay: boolean;
 	location?: string;
-	/** Plain text. HTML descriptions are flattened. */
+	/** Plain text. HTML descriptions are flattened; see `descriptionIsHtml`. */
 	description?: string;
+	descriptionIsHtml: boolean;
 	link?: string;
 	meetUrl?: string;
 	/** confirmed | tentative | cancelled */
 	status?: string;
 
 	organizer?: string;
+	organizerSelf: boolean;
 	attendees: Attendee[];
 	/** This account's own response, when it is an attendee. */
 	selfResponse?: string;
 
 	recurring: boolean;
+	recurringEventId?: string;
+
+	guestsCanModify: boolean;
+	locked: boolean;
+	privateCopy: boolean;
+	eventType: string;
+	attendeesOmitted: boolean;
+
+	/** Untouched wire values, which patches round-trip. */
+	rawStart: RawEventDate;
+	rawEnd: RawEventDate;
+	/** For an occurrence of a series: its slot in the series pattern, before any one-off move. */
+	rawOriginalStart?: RawEventDate;
+	rawAttendees: RawAttendee[];
+}
+
+/** What the current account may do to one event. */
+export interface Editability {
+	canEdit: boolean;
+	canDelete: boolean;
+	canMove: boolean;
+	canRsvp: boolean;
+	/** Why editing is unavailable, for the read-only banner. */
+	reason?: string;
 }

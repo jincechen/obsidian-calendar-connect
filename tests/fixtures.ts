@@ -25,6 +25,7 @@ export function makeEvent(overrides: Partial<CalEvent> = {}): CalEvent {
 	const calendar = makeCalendar();
 	return {
 		id: "evt123",
+		etag: '"3181161784712000"',
 		calendarKey: calendar.key,
 		calendarId: calendar.id,
 		calendarName: calendar.name,
@@ -37,12 +38,22 @@ export function makeEvent(overrides: Partial<CalEvent> = {}): CalEvent {
 		allDay: false,
 		location: "Room 4",
 		description: "Agenda: specs",
+		descriptionIsHtml: false,
 		link: "https://calendar.google.com/event?eid=abc",
 		meetUrl: "https://meet.google.com/xyz-abcd-efg",
 		status: "confirmed",
 		organizer: ACCOUNT,
+		organizerSelf: true,
 		attendees: [],
 		recurring: false,
+		guestsCanModify: false,
+		locked: false,
+		privateCopy: false,
+		eventType: "default",
+		attendeesOmitted: false,
+		rawStart: { dateTime: "2026-08-14T09:30:00+01:00", timeZone: "Europe/London" },
+		rawEnd: { dateTime: "2026-08-14T10:00:00+01:00", timeZone: "Europe/London" },
+		rawAttendees: [],
 		...overrides,
 	};
 }

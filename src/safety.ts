@@ -47,6 +47,11 @@ export function mapsUrl(location: string): string {
 	return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`;
 }
 
+/** Deliberately loose: Google is the real validator; this catches typos before a round-trip. */
+export function isValidEmail(value: string): boolean {
+	return /^[^\s@<>()[\]\\,;:"]+@[^\s@<>()[\]\\,;:"]+\.[^\s@<>()[\]\\,;:"]+$/.test(value.trim());
+}
+
 /**
  * Event text made inert for pasting into a note: one line, with Markdown and
  * HTML syntax escaped, so a stranger's title cannot become an image, link,

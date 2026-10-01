@@ -1,12 +1,21 @@
 import { MarkdownRenderChild } from "obsidian";
 import { moment, type Moment } from "./moment-shim";
 import { AuthError } from "./auth";
+import { editabilityOf } from "./editing";
 import { describeError } from "./google";
 import type CalendarConnectPlugin from "./main";
 import { QueryError, parseQuery, type BlockQuery } from "./query";
 import { renderEvents, renderMessage, stateSignature, type BlockActions } from "./render";
-import { openExternal } from "./safety";
-import type { CalEvent } from "./types";
+import type { CalEvent, Editability } from "./types";
+import { openEventEditor } from "./ui/event-modal";
+
+const READ_ONLY: Editability = {
+	canEdit: false,
+	canDelete: false,
+	canMove: false,
+	canRsvp: false,
+	reason: "This block is read-only",
+};
 
 /** What was last drawn, so the minute tick can redraw without fetching. */
 interface Drawn {
@@ -223,9 +232,16 @@ export class CalendarBlock extends MarkdownRenderChild {
 
 	// --- Actions --------------------------------------------------------------
 
-	private actions(_query: BlockQuery): BlockActions {
+	private actions(query: BlockQuery): BlockActions {
+		const plugin = this.plugin;
+		const ctx = plugin.editContext;
+
 		return {
-			open: (event) => void openExternal(event.link),
+			editability: (event) =>
+				query.editable
+					? editabilityOf(event, plugin.calendar(event.calendarKey), plugin.canWrite(event.accountId))
+					: { ...READ_ONLY },
+			open: (event) => openEventEditor(ctx, event, { readOnly: !query.editable }),
 			refresh: () => this.refresh(),
 		};
 	}

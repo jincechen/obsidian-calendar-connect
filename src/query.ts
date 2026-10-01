@@ -32,6 +32,8 @@ export interface BlockQuery {
 	refresh: number;
 	/** Footer with the last-updated time and refresh. */
 	controls: boolean;
+	/** `false` makes every event in the block open read-only. */
+	editable: boolean;
 }
 
 export interface ParsedQuery {
@@ -109,6 +111,7 @@ const KEY_ALIASES: Record<string, string> = {
 	emptymessage: "empty",
 	refresh: "refresh",
 	controls: "controls",
+	editable: "editable",
 };
 
 function normaliseKey(key: string): string {
@@ -356,6 +359,7 @@ export function parseQuery(source: string, settings: CalendarConnectSettings): P
 			emptyMessage: emptyRaw === undefined || emptyRaw === null ? "No events in this period." : String(emptyRaw),
 			refresh,
 			controls: has("controls") ? toBool(get("controls"), "controls") : true,
+			editable: has("editable") ? toBool(get("editable"), "editable") : true,
 		},
 	};
 }

@@ -21,6 +21,7 @@ const calendar = makeCalendar();
 
 const fullRaw: RawEvent = {
 	id: "evt1",
+	etag: '"123"',
 	status: "confirmed",
 	htmlLink: "https://www.google.com/calendar/event?eid=abc",
 	summary: "  Design review  ",
@@ -29,20 +30,27 @@ const fullRaw: RawEvent = {
 	start: { dateTime: "2026-08-14T09:30:00+01:00", timeZone: "Europe/London" },
 	end: { dateTime: "2026-08-14T10:00:00+01:00", timeZone: "Europe/London" },
 	recurringEventId: "series1",
-	organizer: { email: "sam@example.com", displayName: "Sam" },
+	originalStartTime: { dateTime: "2026-08-14T09:30:00+01:00" },
+	organizer: { email: "sam@example.com", displayName: "Sam", self: false },
 	attendees: [
 		{ email: "sam@example.com", displayName: "Sam", organizer: true, responseStatus: "accepted" },
 		{ email: "alex@example.com", self: true, responseStatus: "tentative", optional: true },
 		{ email: "room@resource.calendar.google.com", resource: true, responseStatus: "accepted" },
 	],
+	guestsCanModify: true,
+	locked: true,
+	privateCopy: true,
+	eventType: "focusTime",
+	attendeesOmitted: true,
 	conferenceData: { entryPoints: [{ entryPointType: "phone", uri: "tel:+1" }, { entryPointType: "video", uri: "https://meet.google.com/abc" }] },
 };
 {
 	const event = normaliseEvent(fullRaw, calendar);
 	check("normalise returns an event", event !== null, true);
 	if (event) {
-		check("normalise identity", [event.id, event.calendarKey, event.calendarId, event.accountId, event.accountLabel], [
+		check("normalise identity", [event.id, event.etag, event.calendarKey, event.calendarId, event.accountId, event.accountLabel], [
 			"evt1",
+			'"123"',
 			calendar.key,
 			calendar.id,
 			calendar.accountId,
@@ -50,7 +58,7 @@ const fullRaw: RawEvent = {
 		]);
 		check("normalise title trimmed", event.title, "Design review");
 		check("normalise location trimmed", event.location, "Room 4");
-		check("normalise HTML description", event.description, "Agenda\nspecs & plans");
+		check("normalise HTML description", [event.description, event.descriptionIsHtml], ["Agenda\nspecs & plans", true]);
 		check("normalise times", [event.allDay, event.start.toISOString(), event.end.toISOString()], [
 			false,
 			"2026-08-14T08:30:00.000Z",
@@ -58,14 +66,24 @@ const fullRaw: RawEvent = {
 		]);
 		check("normalise meet url from conference data", event.meetUrl, "https://meet.google.com/abc");
 		check("normalise link", event.link, "https://www.google.com/calendar/event?eid=abc");
-		check("normalise organizer", event.organizer, "Sam");
+		check("normalise organizer", [event.organizer, event.organizerSelf], ["Sam", false]);
 		check("normalise attendees", event.attendees, [
 			{ email: "sam@example.com", name: "Sam", response: "accepted", self: false, organizer: true, optional: false, resource: false },
 			{ email: "alex@example.com", response: "tentative", self: true, organizer: false, optional: true, resource: false },
 			{ email: "room@resource.calendar.google.com", response: "accepted", self: false, organizer: false, optional: false, resource: true },
 		]);
 		check("normalise selfResponse", event.selfResponse, "tentative");
-		check("normalise recurring", event.recurring, true);
+		check("normalise recurring", [event.recurring, event.recurringEventId], [true, "series1"]);
+		check("normalise flags", [event.guestsCanModify, event.locked, event.privateCopy, event.eventType, event.attendeesOmitted], [
+			true,
+			true,
+			true,
+			"focusTime",
+			true,
+		]);
+		check("normalise raw start/end verbatim", [event.rawStart, event.rawEnd], [fullRaw.start, fullRaw.end]);
+		check("normalise raw attendees verbatim", event.rawAttendees, fullRaw.attendees);
+		check("normalise raw values are copies", event.rawStart !== fullRaw.start && event.rawAttendees[0] !== fullRaw.attendees?.[0], true);
 		check("normalise status", event.status, "confirmed");
 	}
 }
@@ -77,7 +95,7 @@ const fullRaw: RawEvent = {
 			description: "Plain a < b > c",
 			start: { date: "2026-08-14" },
 			end: { date: "2026-08-17" },
-			organizer: { email: calendar.id },
+			organizer: { email: calendar.id, self: true },
 			hangoutLink: "https://meet.google.com/xyz",
 		},
 		calendar
@@ -85,8 +103,16 @@ const fullRaw: RawEvent = {
 	check("all-day parsed", event?.allDay, true);
 	check("all-day start", event?.start.format("YYYY-MM-DD HH:mm"), "2026-08-14 00:00");
 	check("all-day end is inclusive", event?.end.format("YYYY-MM-DD HH:mm"), "2026-08-16 23:59");
-	check("plain description kept verbatim", event?.description, "Plain a < b > c");
-	check("defaults", [event?.attendees, event?.recurring], [[], false]);
+	check("plain description kept verbatim", [event?.description, event?.descriptionIsHtml], ["Plain a < b > c", false]);
+	check("defaults", [event?.eventType, event?.guestsCanModify, event?.locked, event?.attendees, event?.rawAttendees, event?.recurring], [
+		"default",
+		false,
+		false,
+		[],
+		[],
+		false,
+	]);
+	check("organizerSelf", event?.organizerSelf, true);
 	check("hangoutLink wins", event?.meetUrl, "https://meet.google.com/xyz");
 }
 {

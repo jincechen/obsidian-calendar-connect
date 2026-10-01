@@ -14,11 +14,12 @@ import {
 import type { BlockQuery } from "./query";
 import { visibleEvents } from "./store";
 import { mapsUrl, markdownInline, openExternal, safeColor, safeExternalUrl, truncate } from "./safety";
-import type { CalEvent, Field } from "./types";
+import type { CalEvent, Editability, Field } from "./types";
 
 /** What a rendered block can ask its owner to do. `block.ts` supplies the implementation. */
 export interface BlockActions {
-	/** What clicking an event does. */
+	editability(event: CalEvent): Editability;
+	/** Editor or read-only viewer. */
 	open(event: CalEvent): void;
 	refresh(): void;
 }
@@ -70,6 +71,14 @@ function responseLabel(response: string): string | undefined {
 /** The "next" event only shows how soon it starts when that is under this many minutes away. */
 const RELATIVE_WINDOW_MINUTES = 120;
 
+const READ_ONLY: Editability = {
+	canEdit: false,
+	canDelete: false,
+	canMove: false,
+	canRsvp: false,
+	reason: "This block is read-only",
+};
+
 // --- Time-dependent state --------------------------------------------------
 
 interface ViewState {
@@ -112,6 +121,10 @@ export function stateSignature(events: CalEvent[], query: BlockQuery, now: Momen
 }
 
 // --- Shared helpers --------------------------------------------------------
+
+function editabilityFor(event: CalEvent, query: BlockQuery, actions: BlockActions): Editability {
+	return query.editable ? actions.editability(event) : READ_ONLY;
+}
 
 function setColor(el: HTMLElement, event: CalEvent): void {
 	// An empty value removes the property, so the CSS falls back to the accent colour.
@@ -208,12 +221,25 @@ function iconButton(parent: HTMLElement, cls: string, icon: string, label: strin
 /** Keyboard Shift+F10 can also raise a native contextmenu; this keeps it to one menu. */
 let lastMenuAt = 0;
 
-function showEventMenu(event: CalEvent, query: BlockQuery, at: MouseEvent | HTMLElement): void {
+function showEventMenu(
+	event: CalEvent,
+	query: BlockQuery,
+	actions: BlockActions,
+	at: MouseEvent | HTMLElement
+): void {
 	const stamp = Date.now();
 	if (stamp - lastMenuAt < 150) return;
 	lastMenuAt = stamp;
 
+	const editability = editabilityFor(event, query, actions);
 	const menu = new Menu();
+
+	menu.addItem((item) =>
+		item
+			.setTitle(editability.canEdit ? "Edit" : "View details")
+			.setIcon(editability.canEdit ? "pencil" : "eye")
+			.onClick(() => actions.open(event))
+	);
 
 	const meet = safeExternalUrl(event.meetUrl);
 	if (meet) menu.addItem((item) => item.setTitle("Join call").setIcon("video").onClick(() => openExternal(meet)));
@@ -259,14 +285,14 @@ function attachRowBehaviour(row: HTMLElement, event: CalEvent, query: BlockQuery
 			actions.open(event);
 		} else if ((key.key === "F10" && key.shiftKey) || key.key === "ContextMenu") {
 			key.preventDefault();
-			showEventMenu(event, query, row);
+			showEventMenu(event, query, actions, row);
 		}
 	});
 	row.addEventListener("contextmenu", (mouse) => {
 		mouse.preventDefault();
 		mouse.stopPropagation();
 		// A keyboard-raised contextmenu has no pointer position.
-		showEventMenu(event, query, mouse.clientX === 0 && mouse.clientY === 0 ? row : mouse);
+		showEventMenu(event, query, actions, mouse.clientX === 0 && mouse.clientY === 0 ? row : mouse);
 	});
 }
 
@@ -274,7 +300,8 @@ function applyStateClasses(
 	el: HTMLElement,
 	event: CalEvent,
 	query: BlockQuery,
-	view: ViewState
+	view: ViewState,
+	editability: Editability
 ): void {
 	const state = view.states.get(event);
 	el.toggleClass("is-all-day", event.allDay);
@@ -283,6 +310,7 @@ function applyStateClasses(
 	el.toggleClass("is-next", event === view.next);
 	el.toggleClass("is-declined", event.selfResponse === "declined");
 	el.toggleClass("is-tentative", event.selfResponse === "tentative" || event.status === "tentative");
+	el.toggleClass("is-readonly", !editability.canEdit);
 }
 
 function isHidden(event: CalEvent, query: BlockQuery, view: ViewState): boolean {
@@ -328,9 +356,10 @@ function renderRow(
 	actions: BlockActions
 ): void {
 	const { event, part } = item;
+	const editability = editabilityFor(event, query, actions);
 	const row = list.createEl("li", { cls: "cc-row" });
 	setColor(row, event);
-	applyStateClasses(row, event, query, view);
+	applyStateClasses(row, event, query, view, editability);
 
 	if (query.fields.includes("time")) {
 		const time = row.createSpan({ cls: "cc-row-time" });
@@ -415,7 +444,7 @@ function renderRow(
 	}
 
 	iconButton(row, "cc-row-more", "more-horizontal", "More options", (button) =>
-		showEventMenu(event, query, button)
+		showEventMenu(event, query, actions, button)
 	);
 
 	attachRowBehaviour(row, event, query, actions);
@@ -507,10 +536,11 @@ function renderAgenda(container: HTMLElement, events: CalEvent[], query: BlockQu
 		const lineAt = query.highlightNow && isToday ? nowLineIndex(bucket.items, view) : -1;
 		bucket.items.forEach(({ event, part }, index) => {
 			if (index === lineAt) createNowLine(list, "div");
+			const editability = editabilityFor(event, query, options.actions);
 			const row = list.createDiv({ cls: "cc-event" });
 			row.toggleClass("no-gutter", !showTime);
 			setColor(row, event);
-			applyStateClasses(row, event, query, view);
+			applyStateClasses(row, event, query, view, editability);
 
 			if (showTime) row.createDiv({ cls: "cc-event-time", text: timeText(event, query, part) });
 
@@ -521,7 +551,7 @@ function renderAgenda(container: HTMLElement, events: CalEvent[], query: BlockQu
 				titleLine.createSpan({ cls: "cc-row-rel", text: view.relative });
 			}
 			iconButton(titleLine, "cc-row-more", "more-horizontal", "More options", (button) =>
-				showEventMenu(event, query, button)
+				showEventMenu(event, query, options.actions, button)
 			);
 
 			// Short metadata shares one wrapping row; a description is prose and gets its own line.
@@ -556,9 +586,10 @@ function renderTable(container: HTMLElement, events: CalEvent[], query: BlockQue
 
 	const body = table.createEl("tbody");
 	for (const event of visible) {
+		const editability = editabilityFor(event, query, options.actions);
 		const row = body.createEl("tr", { cls: "cc-table-row" });
 		setColor(row, event);
-		applyStateClasses(row, event, query, view);
+		applyStateClasses(row, event, query, view, editability);
 
 		for (const field of query.fields) {
 			const cell = row.createEl("td", { cls: `cc-col-${field}` });

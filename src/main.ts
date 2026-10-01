@@ -9,6 +9,7 @@ import { EventStore, finishEvents, selectCalendars } from "./store";
 import { DeviceTokenStore, type StoredGrant } from "./tokens";
 import type { CalEvent, CalendarInfo } from "./types";
 import { authorize } from "./ui/consent-modal";
+import { type EditContext } from "./ui/event-modal";
 
 // Deliberately specific: `calendar` alone would collide with other plugins.
 export const BLOCK_LANGUAGE = "calendar-connect";
@@ -55,6 +56,7 @@ export function notSignedInWarning(label: string): string {
 export default class CalendarConnectPlugin extends Plugin {
 	settings: CalendarConnectSettings = sanitiseSettings(undefined);
 	readonly store = new EventStore();
+	editContext!: EditContext;
 
 	private tokens!: DeviceTokenStore;
 	/** Grants read from this device's keychain. Only accounts in here are signed in. */
@@ -72,6 +74,24 @@ export default class CalendarConnectPlugin extends Plugin {
 		this.tokens = new DeviceTokenStore(this.app.secretStorage);
 		await this.loadSettings();
 		this.syncRuntimes();
+
+		this.editContext = {
+			app: this.app,
+			settings: () => this.settings,
+			calendars: () => this.settings.knownCalendars,
+			clientFor: (accountId) => this.clientFor(accountId),
+			canWrite: (accountId) => this.canWrite(accountId),
+			afterChange: (calendarKeys) => {
+				// A calendar subscribed by two accounts is cached under both keys.
+				const ids = new Set(calendarKeys.map((key) => this.calendar(key)?.id).filter(Boolean));
+				const keys = new Set(calendarKeys);
+				for (const calendar of this.settings.knownCalendars) {
+					if (ids.has(calendar.id)) keys.add(calendar.key);
+				}
+				for (const key of keys) this.store.invalidateCalendar(key);
+				this.refreshAllBlocks();
+			},
+		};
 
 		this.registerMarkdownCodeBlockProcessor(BLOCK_LANGUAGE, (source, el, ctx) => {
 			ctx.addChild(new CalendarBlock(el, source, this));
@@ -444,6 +464,10 @@ export default class CalendarConnectPlugin extends Plugin {
 	}
 
 	// --- Data -------------------------------------------------------------
+
+	calendar(key: string): CalendarInfo | undefined {
+		return this.settings.knownCalendars.find((calendar) => calendar.key === key);
+	}
 
 	/**
 	 * Calendar lists for every account signed in here. One account failing does

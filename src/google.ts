@@ -161,13 +161,16 @@ export function normaliseEvent(raw: RawEvent, calendar: CalendarInfo): CalEvent 
 	if (!start.isValid() || !end.isValid()) return null;
 	if (end.isBefore(start)) end = allDay ? start.clone().endOf("day") : start.clone();
 
-	const attendees = (raw.attendees ?? []).map(toAttendee);
+	const rawAttendees = (raw.attendees ?? []).map((attendee) => ({ ...attendee }));
+	const attendees = rawAttendees.map(toAttendee);
+	const descriptionIsHtml = Boolean(raw.description && HTML_PATTERN.test(raw.description));
 	const description = raw.description
-		? (HTML_PATTERN.test(raw.description) ? stripHtml(raw.description) : raw.description.trim()) || undefined
+		? (descriptionIsHtml ? stripHtml(raw.description) : raw.description.trim()) || undefined
 		: undefined;
 
 	return {
 		id: raw.id,
+		etag: raw.etag,
 		calendarKey: calendar.key,
 		calendarId: calendar.id,
 		calendarName: calendar.name,
@@ -181,15 +184,29 @@ export function normaliseEvent(raw: RawEvent, calendar: CalendarInfo): CalEvent 
 		allDay,
 		location: raw.location?.trim() || undefined,
 		description,
+		descriptionIsHtml,
 		link: raw.htmlLink || undefined,
 		meetUrl: meetUrlOf(raw),
 		status: raw.status,
 
 		organizer: raw.organizer?.displayName ?? raw.organizer?.email,
+		organizerSelf: Boolean(raw.organizer?.self),
 		attendees,
 		selfResponse: attendees.find((attendee) => attendee.self)?.response,
 
 		recurring: Boolean(raw.recurringEventId) || Boolean(raw.recurrence?.length),
+		recurringEventId: raw.recurringEventId,
+
+		guestsCanModify: Boolean(raw.guestsCanModify),
+		locked: Boolean(raw.locked),
+		privateCopy: Boolean(raw.privateCopy),
+		eventType: raw.eventType || "default",
+		attendeesOmitted: Boolean(raw.attendeesOmitted),
+
+		rawStart: { ...startRaw },
+		rawEnd: { ...endRaw },
+		rawOriginalStart: raw.originalStartTime ? { ...raw.originalStartTime } : undefined,
+		rawAttendees,
 	};
 }
 

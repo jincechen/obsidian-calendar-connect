@@ -1,4 +1,4 @@
-import { mapsUrl, markdownInline, safeColor, safeExternalUrl, truncate } from "../src/safety";
+import { isValidEmail, mapsUrl, markdownInline, safeColor, safeExternalUrl, truncate } from "../src/safety";
 import { check } from "./harness";
 
 // --- safeColor ---------------------------------------------------------------
@@ -64,6 +64,14 @@ check(
 	"https://www.google.com/maps/search/?api=1&query=Room%204%20%26%205%2C%2010%20Downing%20St%20%232"
 );
 check("mapsUrl is always https and safe", safeExternalUrl(mapsUrl("javascript:alert(1)")) !== null, true);
+
+// --- isValidEmail ------------------------------------------------------------
+for (const ok of ["alex@example.com", "a.b+tag@sub.example.co.uk", " bob@example.org "]) {
+	check(`isValidEmail accepts ${ok}`, isValidEmail(ok), true);
+}
+for (const bad of ["", "alex", "alex@", "@example.com", "alex@example", "a b@example.com", "a@b@c.com", "<a@b.com>", "a@b.com, c@d.com"]) {
+	check(`isValidEmail rejects ${JSON.stringify(bad)}`, isValidEmail(bad), false);
+}
 
 // --- truncate ------------------------------------------------------------------
 check("truncate: 0 shows nothing", truncate("hello", 0), "");
