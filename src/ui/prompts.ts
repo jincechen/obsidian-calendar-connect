@@ -1,8 +1,11 @@
 /**
- * Small promise-based questions the editing flows ask: delete confirmation.
+ * Small promise-based questions the editing flows ask: recurring scope, whether
+ * to notify guests, and delete confirmation.
  * Every prompt resolves to null when dismissed (Esc, ×, click outside).
  */
 import { App, ButtonComponent, Modal } from "obsidian";
+import type { CalendarConnectSettings } from "../settings";
+import type { SendUpdates } from "../google";
 
 export interface ChoiceOption<T> {
 	label: string;
@@ -69,6 +72,60 @@ class ChoiceModal<T> extends Modal {
 /** Shows a row of buttons; resolves with the chosen value, or null when dismissed. */
 export function choose<T>(app: App, request: ChoiceRequest<T>): Promise<T | null> {
 	return new Promise((resolve) => new ChoiceModal(app, request, resolve).open());
+}
+
+export type RecurringScope = "thisEvent" | "allEvents";
+
+export function askRecurringScope(
+	app: App,
+	opts: { verb: "Save" | "Delete"; thisEvent?: boolean; allEvents?: boolean; hint?: string }
+): Promise<RecurringScope | null> {
+	const thisAllowed = opts.thisEvent ?? true;
+	const allAllowed = opts.allEvents ?? true;
+	return choose<RecurringScope>(app, {
+		title: opts.verb === "Delete" ? "Delete recurring event" : "Change recurring event",
+		message:
+			opts.verb === "Delete"
+				? "Delete only this occurrence, or every event in the series?"
+				: "Apply your changes to this occurrence only, or to every event in the series?",
+		options: [
+			{
+				label: "This event",
+				value: "thisEvent",
+				cta: thisAllowed && !allAllowed,
+				disabled: !thisAllowed,
+				hint: thisAllowed ? undefined : opts.hint,
+			},
+			{
+				label: "All events",
+				value: "allEvents",
+				warning: opts.verb === "Delete",
+				cta: opts.verb !== "Delete" && allAllowed && !thisAllowed,
+				disabled: !allAllowed,
+				hint: allAllowed ? undefined : opts.hint,
+			},
+		],
+	});
+}
+
+/** Resolves the notify setting; asks only when it is "ask". Null = the user cancelled. */
+export async function askNotifyGuests(
+	app: App,
+	settings: CalendarConnectSettings,
+	what: "update" | "cancellation" | "invitation" = "update"
+): Promise<SendUpdates | null> {
+	if (settings.notifyGuests === "always") return "all";
+	if (settings.notifyGuests === "never") return "none";
+	const value = await choose<SendUpdates | "cancel">(app, {
+		title: "Notify guests?",
+		message: `Email the guests ${what === "invitation" ? "an invitation" : `a ${what}`}?`,
+		options: [
+			{ label: "Cancel", value: "cancel" },
+			{ label: "Don't send", value: "none" },
+			{ label: "Send updates", value: "all", cta: true },
+		],
+	});
+	return value === "cancel" || value === null ? null : value;
 }
 
 export async function confirmDelete(app: App, title: string): Promise<boolean> {

@@ -220,6 +220,26 @@ export function diffDraft(original: EventDraft, draft: EventDraft): ChangeSet {
 	return { ...changes, any: Object.values(changes).some(Boolean) };
 }
 
+export interface ScopeOptions {
+	thisEvent: boolean;
+	allEvents: boolean;
+	/** Set when no scope can apply these changes in one save. */
+	error?: string;
+}
+
+/**
+ * Which recurring scopes can apply `changes`. A date change only makes sense for
+ * one occurrence; Google can only move whole series between calendars.
+ */
+export function scopeOptions(changes: ChangeSet): ScopeOptions {
+	if (changes.dateChanged && changes.calendar) {
+		return { thisEvent: false, allEvents: false, error: "Change the date and the calendar in two separate saves." };
+	}
+	if (changes.dateChanged) return { thisEvent: true, allEvents: false };
+	if (changes.calendar) return { thisEvent: false, allEvents: true };
+	return { thisEvent: true, allEvents: true };
+}
+
 // --- Request bodies ----------------------------------------------------------
 
 /** The zone sent with timed writes: the event's own, else the calendar's, else this device's. */
@@ -279,6 +299,64 @@ export function buildEventPatch(event: CalEvent, draft: EventDraft, changes: Cha
 	return patch;
 }
 
+/**
+ * Where an occurrence sits in its series pattern. A one-off move (10:00 moved to
+ * 14:00) changes `start` but not this, and series shifts are measured from it.
+ */
+function seriesSlot(instance: CalEvent): Moment {
+	const original = instance.rawOriginalStart;
+	const slot = original?.dateTime ? moment(original.dateTime) : original?.date ? parseDate(original.date) : null;
+	return slot?.isValid() ? slot : instance.start;
+}
+
+/**
+ * A patch for a recurring series' master that carries an edit made on one
+ * occurrence. Time edits become a shift and a duration applied to the master's
+ * own start: the occurrence's date is never written into the series.
+ */
+export function buildMasterPatch(
+	master: RawEvent,
+	instance: CalEvent,
+	draft: EventDraft,
+	changes: ChangeSet,
+	timeZone: string
+): Record<string, unknown> {
+	if (changes.dateChanged) throw new Error("A date change can only apply to this event");
+	const patch = textFields(draft, changes, master.attendees ?? instance.rawAttendees);
+	if (!changes.time) return patch;
+
+	const masterStart = master.start ?? {};
+	const zone = masterStart.timeZone || timeZone;
+	const masterDay = masterStart.date ?? (masterStart.dateTime ? moment(masterStart.dateTime).format(DATE) : "");
+	if (!masterDay || !parseDate(masterDay).isValid()) throw new Error("The series has no start to shift");
+
+	if (draft.allDay) {
+		// Whole days: shift by the day difference, keep the drafted length.
+		const shiftDays = Math.round(parseDate(draft.startDate).diff(seriesSlot(instance).clone().startOf("day"), "days", true));
+		const lengthDays = Math.round(parseDate(draft.endDate).diff(parseDate(draft.startDate), "days", true)) + 1;
+		const startDay = parseDate(masterDay).add(shiftDays, "days");
+		patch.start = allDayDate(startDay.format(DATE), masterStart.timeZone);
+		patch.end = allDayDate(startDay.clone().add(lengthDays, "days").format(DATE), masterStart.timeZone);
+		return patch;
+	}
+
+	const newStart = draftStart(draft);
+	const durationMs = draftEnd(draft).valueOf() - newStart.valueOf();
+	let start: Moment;
+	if (masterStart.dateTime && !instance.allDay) {
+		// An unchanged start shifts nothing (a length-only edit must not drag the
+		// series to a moved occurrence's time); a new start is measured from the slot.
+		const shiftMs = newStart.valueOf() === instance.start.valueOf() ? 0 : newStart.valueOf() - seriesSlot(instance).valueOf();
+		start = moment(masterStart.dateTime).add(shiftMs, "milliseconds");
+	} else {
+		// The series was all-day: place the drafted time on the master's own first day.
+		start = moment(`${masterDay} ${draft.startTime}`, `${DATE} ${TIME}`, true);
+	}
+	patch.start = timedDate(start, zone);
+	patch.end = timedDate(start.clone().add(durationMs, "milliseconds"), zone);
+	return patch;
+}
+
 /** Body for `events.insert`. The client-generated `id` makes a retried insert harmless. */
 export function buildInsertBody(draft: EventDraft, timeZone: string, id: string): RawEvent {
 	const body: RawEvent = { id, summary: draft.title };
@@ -321,4 +399,20 @@ export function newEventId(rand: () => number = Math.random): string {
 	let id = "";
 	for (let i = 0; i < 26; i++) id += ID_ALPHABET[Math.floor(rand() * ID_ALPHABET.length) % ID_ALPHABET.length];
 	return id;
+}
+
+/**
+ * Whether anyone besides this account (and rooms) is invited — i.e. whether a
+ * notify prompt makes sense. `extraEmails` are guests the draft would add.
+ */
+export function hasOtherGuests(rawAttendees: RawAttendee[], extraEmails: string[] = [], selfEmail?: string): boolean {
+	const selves = new Set<string>();
+	if (selfEmail) selves.add(normaliseEmail(selfEmail));
+	for (const a of rawAttendees) if (a.self && a.email) selves.add(normaliseEmail(a.email));
+	const resources = new Set(rawAttendees.filter((a) => a.resource && a.email).map((a) => normaliseEmail(a.email ?? "")));
+	if (rawAttendees.some((a) => !a.self && !a.resource && !(a.email && selves.has(normaliseEmail(a.email))))) return true;
+	return extraEmails.some((email) => {
+		const e = normaliseEmail(email);
+		return e !== "" && !selves.has(e) && !resources.has(e);
+	});
 }

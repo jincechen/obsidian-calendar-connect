@@ -9,21 +9,24 @@
 import { App, ButtonComponent, DropdownComponent, Modal, Notice, Setting, TextComponent, setIcon } from "obsidian";
 import type { Moment } from "../moment-shim";
 import type { CalendarConnectSettings } from "../settings";
-import type { CalEvent, CalendarInfo, Editability } from "../types";
+import type { CalEvent, CalendarInfo, Editability, RawEvent } from "../types";
 import { CalendarApiError, describeError, normaliseEvent, type GoogleCalendarClient, type SendUpdates } from "../google";
 import { HttpError } from "../http";
 import { isValidEmail, openExternal, safeExternalUrl } from "../safety";
 import {
 	buildEventPatch,
 	buildInsertBody,
+	buildMasterPatch,
 	buildRsvpPatch,
 	diffDraft,
 	draftFromEvent,
 	editabilityOf,
+	hasOtherGuests,
 	newDraft,
 	newEventId,
 	normaliseEmail,
 	pickTimeZone,
+	scopeOptions,
 	validateDraft,
 	withStart,
 	type ChangeSet,
@@ -31,7 +34,7 @@ import {
 	type EventDraft,
 	type RsvpResponse,
 } from "../editing";
-import { confirmDelete } from "./prompts";
+import { askNotifyGuests, askRecurringScope, confirmDelete, type RecurringScope } from "./prompts";
 
 export interface EditContext {
 	app: App;
@@ -259,6 +262,7 @@ class EventModal extends Modal {
 			});
 		});
 		if (this.mode === "edit" && !this.editability.canMove) row.setDesc("Only the organizer can move this event");
+		else if (this.mode === "edit" && this.event?.recurringEventId) row.setDesc("Moving applies to the whole series");
 	}
 
 	private renderTimes(parent: HTMLElement): void {
@@ -522,7 +526,32 @@ class EventModal extends Modal {
 			return;
 		}
 
-		const sendUpdates: SendUpdates = "none";
+		let scope: RecurringScope | null = null;
+		if (event.recurringEventId) {
+			const options = scopeOptions(changes);
+			if (options.error) {
+				this.showError(options.error);
+				return;
+			}
+			scope = await askRecurringScope(this.app, {
+				verb: "Save",
+				thisEvent: options.thisEvent,
+				allEvents: options.allEvents,
+				hint: changes.dateChanged
+					? "A date change can only apply to this event."
+					: changes.calendar
+						? "Moving to another calendar always moves the whole series."
+						: undefined,
+			});
+			if (!scope) return;
+		}
+
+		let sendUpdates: SendUpdates = "none";
+		if (hasOtherGuests(event.rawAttendees, this.draft.guests, event.accountId)) {
+			const choice = await askNotifyGuests(this.app, this.ctx.settings(), "update");
+			if (!choice) return;
+			sendUpdates = choice;
+		}
 
 		const client = this.ctx.clientFor(event.accountId);
 		if (!client) {
@@ -532,7 +561,7 @@ class EventModal extends Modal {
 
 		this.setBusy(true);
 		try {
-			const keys = await this.write(client, event, this.draft, changes, sendUpdates);
+			const keys = await this.write(client, event, this.draft, changes, scope, sendUpdates);
 			this.succeed(keys);
 		} catch (error) {
 			this.handleSaveError(error);
@@ -547,12 +576,19 @@ class EventModal extends Modal {
 		event: CalEvent,
 		draft: EventDraft,
 		changes: ChangeSet,
+		scope: RecurringScope | null,
 		sendUpdates: SendUpdates
 	): Promise<string[]> {
 		const keys = [event.calendarKey];
 		let calendarId = event.calendarId;
-		const eventId = event.id;
+		let eventId = event.id;
 		let etag = event.etag;
+		let master: RawEvent | null = null;
+		if (scope === "allEvents" && event.recurringEventId) {
+			eventId = event.recurringEventId;
+			master = await client.getEvent(calendarId, eventId);
+			etag = master.etag;
+		}
 
 		let moved = false;
 		if (changes.calendar) {
@@ -562,6 +598,7 @@ class EventModal extends Modal {
 			moved = true;
 			calendarId = target.id;
 			etag = result.etag;
+			if (master) master = result;
 			keys.push(target.key);
 		}
 
@@ -570,7 +607,9 @@ class EventModal extends Modal {
 		if (!rest.any) return keys;
 		try {
 			const timeZone = pickTimeZone(event, calendarOf(this.ctx, event));
-			const patch = buildEventPatch(event, draft, rest, timeZone);
+			const patch = master
+				? buildMasterPatch(master, event, draft, rest, timeZone)
+				: buildEventPatch(event, draft, rest, timeZone);
 			if (Object.keys(patch).length) await client.patchEvent(calendarId, eventId, patch, { etag, sendUpdates });
 		} catch (error) {
 			if (moved) throw new PartialSaveError(error);
@@ -629,7 +668,12 @@ class EventModal extends Modal {
 			this.showError(NOT_SIGNED_IN);
 			return;
 		}
-		const sendUpdates: SendUpdates = "none";
+		let sendUpdates: SendUpdates = "none";
+		if (hasOtherGuests([], this.draft.guests, calendar.accountId)) {
+			const choice = await askNotifyGuests(this.app, this.ctx.settings(), "invitation");
+			if (!choice) return;
+			sendUpdates = choice;
+		}
 		this.setBusy(true);
 		try {
 			const body = buildInsertBody(this.draft, pickTimeZone(undefined, calendar), newEventId());
@@ -737,12 +781,24 @@ export async function respond(ctx: EditContext, event: CalEvent, response: "acce
 	}
 }
 
-/** Confirm → delete. Resolves true when the event was deleted. */
+/** Confirm → recurring scope → notify → delete. Resolves true when the event was deleted. */
 async function deleteFlow(ctx: EditContext, event: CalEvent): Promise<boolean> {
 	const { app } = ctx;
 	if (ctx.settings().confirmDelete && !(await confirmDelete(app, event.title))) return false;
 
-	const sendUpdates: SendUpdates = "none";
+	let eventId = event.id;
+	if (event.recurringEventId) {
+		const scope = await askRecurringScope(app, { verb: "Delete" });
+		if (!scope) return false;
+		if (scope === "allEvents") eventId = event.recurringEventId;
+	}
+
+	let sendUpdates: SendUpdates = "none";
+	if (hasOtherGuests(event.rawAttendees, [], event.accountId)) {
+		const choice = await askNotifyGuests(app, ctx.settings(), "cancellation");
+		if (!choice) return false;
+		sendUpdates = choice;
+	}
 
 	const client = ctx.clientFor(event.accountId);
 	if (!client) {
@@ -750,7 +806,7 @@ async function deleteFlow(ctx: EditContext, event: CalEvent): Promise<boolean> {
 		return false;
 	}
 	try {
-		await client.deleteEvent(event.calendarId, event.id, { sendUpdates });
+		await client.deleteEvent(event.calendarId, eventId, { sendUpdates });
 	} catch (error) {
 		if (isUncertain(error)) {
 			new Notice("Couldn't confirm the delete — refreshing to check");
@@ -765,7 +821,7 @@ async function deleteFlow(ctx: EditContext, event: CalEvent): Promise<boolean> {
 	return true;
 }
 
-/** Delete with a confirm prompt. */
+/** Delete with confirm / recurring scope / notify prompts. */
 export async function deleteWithPrompts(ctx: EditContext, event: CalEvent): Promise<void> {
 	await deleteFlow(ctx, event);
 }

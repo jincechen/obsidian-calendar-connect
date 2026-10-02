@@ -7,6 +7,9 @@ export type AllDayMode = "include" | "exclude" | "only";
 /** How events that have already ended are shown. */
 export type PastMode = "show" | "dim" | "hide";
 
+/** Whether to tell guests about a change: ask each time, or a fixed answer. */
+export type NotifyMode = "ask" | "always" | "never";
+
 /** Fields that can be surfaced in a view and used as table columns. */
 export type Field =
 	| "date"

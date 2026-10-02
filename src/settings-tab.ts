@@ -448,6 +448,15 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 							Number.isFinite(value) && value >= 5 && value <= 24 * 60 ? undefined : "Use 5 to 1440 minutes.",
 					},
 				},
+				{
+					name: "Notify guests",
+					desc: "Whether guests get an email when you change or delete an event they are invited to.",
+					control: {
+						type: "dropdown",
+						key: "notifyGuests",
+						options: { ask: "Ask each time", always: "Always", never: "Never" },
+					},
+				},
 				{ name: "Confirm before deleting", control: { type: "toggle", key: "confirmDelete" } },
 			],
 		};

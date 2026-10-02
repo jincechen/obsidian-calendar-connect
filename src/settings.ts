@@ -1,4 +1,4 @@
-import type { CalendarInfo, PastMode, ViewMode } from "./types";
+import type { CalendarInfo, NotifyMode, PastMode, ViewMode } from "./types";
 
 /**
  * One connected Google account as the vault knows it. Deliberately holds no
@@ -42,6 +42,7 @@ export interface CalendarConnectSettings {
 
 	/** Length of a new event, in minutes. */
 	defaultEventMinutes: number;
+	notifyGuests: NotifyMode;
 	confirmDelete: boolean;
 
 	/** Seconds an API response stays reusable. */
@@ -71,6 +72,7 @@ export const DEFAULT_SETTINGS: CalendarConnectSettings = {
 	descriptionLength: 200,
 
 	defaultEventMinutes: 30,
+	notifyGuests: "ask",
 	confirmDelete: true,
 
 	cacheTtl: 300,
@@ -200,6 +202,7 @@ export function sanitiseSettings(raw: unknown): CalendarConnectSettings {
 		descriptionLength: num(data.descriptionLength, d.descriptionLength, 0, 10000),
 
 		defaultEventMinutes: num(data.defaultEventMinutes, d.defaultEventMinutes, 5, 24 * 60),
+		notifyGuests: oneOf(data.notifyGuests, ["ask", "always", "never"] as const, d.notifyGuests),
 		confirmDelete: bool(data.confirmDelete, d.confirmDelete),
 
 		cacheTtl: num(data.cacheTtl, d.cacheTtl, 0, 24 * 3600),

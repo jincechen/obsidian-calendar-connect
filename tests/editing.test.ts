@@ -2,18 +2,22 @@ import { moment } from "../src/moment-shim";
 import {
 	buildEventPatch,
 	buildInsertBody,
+	buildMasterPatch,
 	buildRsvpPatch,
 	diffDraft,
 	draftFromEvent,
 	editabilityOf,
+	hasOtherGuests,
 	newDraft,
 	newEventId,
 	pickTimeZone,
+	scopeOptions,
 	validateDraft,
 	withStart,
+	type ChangeSet,
 	type EventDraft,
 } from "../src/editing";
-import type { CalEvent, RawAttendee } from "../src/types";
+import type { CalEvent, RawAttendee, RawEvent } from "../src/types";
 import { ACCOUNT, makeCalendar, makeEvent } from "./fixtures";
 import { check, throws } from "./harness";
 
@@ -201,6 +205,142 @@ check(
 	});
 }
 
+// --- buildMasterPatch ---------------------------------------------------------------
+{
+	const instance = makeEvent({
+		id: "evt123_20260814T083000Z",
+		recurring: true,
+		recurringEventId: "evt123",
+	});
+	const master: RawEvent = {
+		id: "evt123",
+		etag: '"m1"',
+		recurrence: ["RRULE:FREQ=WEEKLY"],
+		start: { dateTime: moment("2026-01-05T09:30").format(), timeZone: TZ },
+		end: { dateTime: moment("2026-01-05T10:00").format(), timeZone: TZ },
+		attendees: [{ email: "bob@example.com", responseStatus: "accepted" }],
+	};
+	const masterPatch = (edit: (d: EventDraft) => void, m: RawEvent = master, inst: CalEvent = instance, tz = "Asia/Tokyo") => {
+		const original = draftFromEvent(inst);
+		const draft: EventDraft = { ...original, guests: [...original.guests] };
+		edit(draft);
+		return buildMasterPatch(m, inst, draft, diffDraft(original, draft), tz);
+	};
+
+	check(
+		"master: +1h applied on the master's own date",
+		masterPatch((d) => {
+			d.startTime = "10:30";
+			d.endTime = "11:00";
+		}),
+		{
+			start: { dateTime: local("2026-01-05 10:30"), timeZone: TZ, date: null },
+			end: { dateTime: local("2026-01-05 11:00"), timeZone: TZ, date: null },
+		}
+	);
+	check(
+		"master: duration change keeps the master's start",
+		masterPatch((d) => (d.endTime = "10:45")),
+		{
+			start: { dateTime: local("2026-01-05 09:30"), timeZone: TZ, date: null },
+			end: { dateTime: local("2026-01-05 10:45"), timeZone: TZ, date: null },
+		}
+	);
+	check(
+		"master: falls back to the given zone when the master has none",
+		(masterPatch((d) => (d.endTime = "10:45"), { ...master, start: { dateTime: master.start?.dateTime } }).start as { timeZone: string }).timeZone,
+		"Asia/Tokyo"
+	);
+	// An occurrence already moved from its 09:30 slot to 14:00.
+	const moved = makeEvent({
+		...instance,
+		start: moment("2026-08-14T14:00"),
+		end: moment("2026-08-14T14:30"),
+		rawOriginalStart: { dateTime: moment("2026-08-14T09:30").format(), timeZone: TZ },
+	});
+	check(
+		"master: a new start on a moved occurrence is measured from its series slot",
+		masterPatch(
+			(d) => {
+				d.startTime = "15:00";
+				d.endTime = "15:30";
+			},
+			master,
+			moved
+		),
+		{
+			start: { dateTime: local("2026-01-05 15:00"), timeZone: TZ, date: null },
+			end: { dateTime: local("2026-01-05 15:30"), timeZone: TZ, date: null },
+		}
+	);
+	check(
+		"master: a length-only edit on a moved occurrence keeps the series start",
+		masterPatch((d) => (d.endTime = "14:45"), master, moved),
+		{
+			start: { dateTime: local("2026-01-05 09:30"), timeZone: TZ, date: null },
+			end: { dateTime: local("2026-01-05 10:15"), timeZone: TZ, date: null },
+		}
+	);
+	check("master: title only", masterPatch((d) => (d.title = "Weekly")), { summary: "Weekly" });
+	check(
+		"master: guests round-trip the master's attendees",
+		masterPatch((d) => (d.guests = ["bob@example.com", "eve@example.com"])),
+		{ attendees: [{ email: "bob@example.com", responseStatus: "accepted" }, { email: "eve@example.com" }] }
+	);
+	throws("master: a date change throws", () =>
+		masterPatch((d) => {
+			d.startDate = "2026-08-15";
+			d.endDate = "2026-08-15";
+		})
+	);
+	check("master: all-day toggle uses the master's own date", masterPatch((d) => (d.allDay = true)), {
+		start: { date: "2026-01-05", dateTime: null, timeZone: TZ },
+		end: { date: "2026-01-06", dateTime: null, timeZone: TZ },
+	});
+
+	const allDayMaster: RawEvent = { id: "bday", start: { date: "2025-03-01" }, end: { date: "2025-03-02" } };
+	const allDayInstance = allDayEvent("2026-08-14", "2026-08-14", { recurring: true, recurringEventId: "bday" });
+	check(
+		"master: all-day → timed lands on the master's first day",
+		masterPatch((d) => (d.allDay = false), allDayMaster, allDayInstance),
+		{
+			start: { dateTime: local("2025-03-01 09:00"), timeZone: "Asia/Tokyo", date: null },
+			end: { dateTime: local("2025-03-01 10:00"), timeZone: "Asia/Tokyo", date: null },
+		}
+	);
+	check(
+		"master: all-day length change",
+		masterPatch((d) => (d.endDate = "2026-08-15"), allDayMaster, allDayInstance),
+		{ start: { date: "2025-03-01", dateTime: null }, end: { date: "2025-03-03", dateTime: null } }
+	);
+}
+
+// --- scopeOptions --------------------------------------------------------------------
+{
+	const base: ChangeSet = {
+		title: false,
+		time: false,
+		dateChanged: false,
+		location: false,
+		description: false,
+		guests: false,
+		calendar: false,
+		any: true,
+	};
+	check("scope: title change → both", scopeOptions({ ...base, title: true }), { thisEvent: true, allEvents: true });
+	check("scope: time change → both", scopeOptions({ ...base, time: true }), { thisEvent: true, allEvents: true });
+	check("scope: date change → this event only", scopeOptions({ ...base, time: true, dateChanged: true }), {
+		thisEvent: true,
+		allEvents: false,
+	});
+	check("scope: calendar change → all events only", scopeOptions({ ...base, calendar: true }), { thisEvent: false, allEvents: true });
+	check("scope: date + calendar → error", scopeOptions({ ...base, time: true, dateChanged: true, calendar: true }), {
+		thisEvent: false,
+		allEvents: false,
+		error: "Change the date and the calendar in two separate saves.",
+	});
+}
+
 // --- buildInsertBody -----------------------------------------------------------------
 {
 	const draft = newDraft(moment("2026-08-14T14:00"), 45, "k");
@@ -313,6 +453,20 @@ check(
 	check("newEventId: 1000 unique", new Set(ids).size, 1000);
 	check("newEventId: rand 0", newEventId(() => 0), "0".repeat(26));
 	check("newEventId: rand just below 1", newEventId(() => 0.999999999), "v".repeat(26));
+}
+
+// --- hasOtherGuests ------------------------------------------------------------------------
+{
+	const self = { email: ACCOUNT, self: true, organizer: true };
+	const room = { email: "room-4@resource.calendar.google.com", resource: true };
+	check("hasOtherGuests: nobody", hasOtherGuests([]), false);
+	check("hasOtherGuests: only me", hasOtherGuests([self]), false);
+	check("hasOtherGuests: me and a room", hasOtherGuests([self, room]), false);
+	check("hasOtherGuests: someone else", hasOtherGuests([self, { email: "bob@example.com" }]), true);
+	check("hasOtherGuests: an added guest counts", hasOtherGuests([self], ["bob@example.com"]), true);
+	check("hasOtherGuests: re-listing existing guests does not", hasOtherGuests([self, room], [ACCOUNT, room.email]), false);
+	check("hasOtherGuests: my own address via selfEmail", hasOtherGuests([], [" ALEX@example.com "], ACCOUNT), false);
+	check("hasOtherGuests: new event with a guest", hasOtherGuests([], ["bob@example.com"], ACCOUNT), true);
 }
 
 // --- pickTimeZone ------------------------------------------------------------------------
