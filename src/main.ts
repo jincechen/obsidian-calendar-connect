@@ -1,14 +1,17 @@
 import { Notice, Plugin } from "obsidian";
-import { AuthError, GoogleAuth, ReauthRequiredError, revoke, type ClientConfig } from "./auth";
+import { moment } from "./moment-shim";
+import { AuthError, GoogleAuth, ReauthRequiredError, canWriteWith, revoke, type ClientConfig } from "./auth";
 import { CalendarBlock } from "./block";
+import { nextSlot } from "./dates";
 import { GoogleCalendarClient, describeError } from "./google";
 import type { BlockQuery } from "./query";
-import { sanitiseSettings, type AccountSettings, type CalendarConnectSettings } from "./settings";
+import { DEFAULT_SETTINGS, sanitiseSettings, type AccountSettings, type CalendarConnectSettings } from "./settings";
 import { CalendarConnectSettingTab } from "./settings-tab";
 import { EventStore, finishEvents, selectCalendars } from "./store";
 import { DeviceTokenStore, type StoredGrant } from "./tokens";
 import type { CalEvent, CalendarInfo } from "./types";
 import { authorize } from "./ui/consent-modal";
+import { openEventCreator, type EditContext } from "./ui/event-modal";
 
 // Deliberately specific: `calendar` alone would collide with other plugins.
 export const BLOCK_LANGUAGE = "calendar-connect";
@@ -55,6 +58,7 @@ export function notSignedInWarning(label: string): string {
 export default class CalendarConnectPlugin extends Plugin {
 	settings: CalendarConnectSettings = sanitiseSettings(undefined);
 	readonly store = new EventStore();
+	editContext!: EditContext;
 
 	private tokens!: DeviceTokenStore;
 	/** Grants read from this device's keychain. Only accounts in here are signed in. */
@@ -72,6 +76,24 @@ export default class CalendarConnectPlugin extends Plugin {
 		this.tokens = new DeviceTokenStore(this.app.secretStorage);
 		await this.loadSettings();
 		this.syncRuntimes();
+
+		this.editContext = {
+			app: this.app,
+			settings: () => this.settings,
+			calendars: () => this.settings.knownCalendars,
+			clientFor: (accountId) => this.clientFor(accountId),
+			canWrite: (accountId) => this.canWrite(accountId),
+			afterChange: (calendarKeys) => {
+				// A calendar subscribed by two accounts is cached under both keys.
+				const ids = new Set(calendarKeys.map((key) => this.calendar(key)?.id).filter(Boolean));
+				const keys = new Set(calendarKeys);
+				for (const calendar of this.settings.knownCalendars) {
+					if (ids.has(calendar.id)) keys.add(calendar.key);
+				}
+				for (const key of keys) this.store.invalidateCalendar(key);
+				this.refreshAllBlocks();
+			},
+		};
 
 		this.registerMarkdownCodeBlockProcessor(BLOCK_LANGUAGE, (source, el, ctx) => {
 			ctx.addChild(new CalendarBlock(el, source, this));
@@ -101,6 +123,21 @@ export default class CalendarConnectPlugin extends Plugin {
 			name: "Insert calendar block",
 			editorCallback: (editor) => {
 				editor.replaceSelection(`\`\`\`${BLOCK_LANGUAGE}\nfrom: today\nperiod: 1d\n\`\`\`\n`);
+			},
+		});
+
+		this.addCommand({
+			id: "create-event",
+			name: "Create event",
+			callback: () => {
+				if (this.connectedAccounts().length === 0) {
+					new Notice("Connect a Google account first (Settings → Calendar Connect).");
+					return;
+				}
+				openEventCreator(this.editContext, {
+					start: nextSlot(moment()),
+					calendarKey: this.settings.newEventCalendar || undefined,
+				});
 			},
 		});
 
@@ -242,6 +279,11 @@ export default class CalendarConnectPlugin extends Plugin {
 		return this.needsReconnect.has(id);
 	}
 
+	canWrite(id: string): boolean {
+		if (!this.grants.has(id) || this.needsReconnect.has(id)) return false;
+		return this.runtimes.get(id)?.auth.canWrite() ?? false;
+	}
+
 	clientFor(id: string): GoogleCalendarClient | null {
 		return this.grants.has(id) ? this.runtimes.get(id)?.client ?? null : null;
 	}
@@ -348,7 +390,12 @@ export default class CalendarConnectPlugin extends Plugin {
 			this.runtimes.get(id)?.auth.seed(grant.accessToken, grant.expiresAt);
 
 			const name = this.account(id)?.label ?? address ?? "Google account";
-			new Notice(`Connected ${name}`, 8000);
+			new Notice(
+				canWriteWith(held.scopes)
+					? `Connected ${name} (read & write)`
+					: `Connected ${name} (read-only: editing permission not granted)`,
+				8000
+			);
 
 			this.invalidateAll();
 			await this.getCalendars().catch(() => undefined);
@@ -394,11 +441,14 @@ export default class CalendarConnectPlugin extends Plugin {
 		this.needsReconnect.delete(id);
 	}
 
-	/** Drops cached calendars and default selections belonging to an account. */
+	/** Drops cached calendars, default selections and the new-event calendar of an account. */
 	private purgeAccountData(id: string): void {
 		this.settings.knownCalendars = this.settings.knownCalendars.filter((calendar) => calendar.accountId !== id);
 		const remaining = new Set(this.settings.knownCalendars.map((calendar) => calendar.key));
 		this.settings.defaultCalendars = this.settings.defaultCalendars.filter((key) => remaining.has(key));
+		if (this.settings.newEventCalendar && !remaining.has(this.settings.newEventCalendar)) {
+			this.settings.newEventCalendar = DEFAULT_SETTINGS.newEventCalendar;
+		}
 	}
 
 	async renameAccount(id: string, label: string): Promise<void> {
@@ -434,6 +484,17 @@ export default class CalendarConnectPlugin extends Plugin {
 	}
 
 	// --- Data -------------------------------------------------------------
+
+	calendar(key: string): CalendarInfo | undefined {
+		return this.settings.knownCalendars.find((calendar) => calendar.key === key);
+	}
+
+	/** Calendars this device can create events in right now. */
+	writableCalendars(): CalendarInfo[] {
+		return this.settings.knownCalendars.filter(
+			(calendar) => (calendar.accessRole === "owner" || calendar.accessRole === "writer") && this.canWrite(calendar.accountId)
+		);
+	}
 
 	/**
 	 * Calendar lists for every account signed in here. One account failing does

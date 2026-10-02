@@ -8,7 +8,7 @@ import {
 	type SettingDefinitionList,
 	type SettingDefinitionPage,
 } from "obsidian";
-import { SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY } from "./auth";
+import { SCOPE_CALENDAR_LIST, SCOPE_EVENTS } from "./auth";
 import { describeError } from "./google";
 import type CalendarConnectPlugin from "./main";
 import { isValidPeriod } from "./query";
@@ -22,6 +22,7 @@ import {
 } from "./settings";
 
 const CONSOLE_URL = "https://console.cloud.google.com/apis/credentials";
+const NEW_EVENT_SETTING = "Calendar for new events";
 
 /** Settings that only affect the OAuth client; changing them rebuilds runtimes rather than redrawing blocks. */
 const CLIENT_KEYS = new Set(["clientId", "clientSecret", "oauthPort"]);
@@ -126,6 +127,7 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 			this.accountsList(),
 			this.calendarsGroup(),
 			this.displayGroup(),
+			this.editingGroup(),
 			this.syncGroup(),
 		];
 	}
@@ -162,7 +164,7 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 			const scopes = list.createEl("li", { text: "Add the scopes " });
 			scopes.createEl("code", { text: SCOPE_CALENDAR_LIST.replace("https://www.googleapis.com", "…") });
 			scopes.appendText(" and ");
-			scopes.createEl("code", { text: SCOPE_EVENTS_READONLY.replace("https://www.googleapis.com", "…") });
+			scopes.createEl("code", { text: SCOPE_EVENTS.replace("https://www.googleapis.com", "…") });
 			scopes.appendText(".");
 			list.createEl("li", {
 				text:
@@ -219,7 +221,14 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 		if (this.plugin.needsReconnecting(account.id)) {
 			return { desc: `${account.id} · Needs reconnecting`, warning: true, action: "Reconnect" };
 		}
-		return { desc: `${account.id} · ${count}`, warning: false, action: "Reconnect" };
+		if (!this.plugin.canWrite(account.id)) {
+			return {
+				desc: `${account.id} · ${count} · Read-only — reconnect to enable editing`,
+				warning: true,
+				action: "Reconnect to enable editing",
+			};
+		}
+		return { desc: `${account.id} · ${count} · Read & write`, warning: false, action: "Reconnect" };
 	}
 
 	private accountsList(): SettingDefinitionList {
@@ -285,8 +294,17 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 	}
 
 	private calendarsGroup(): SettingDefinitionGroup {
-		const calendars = this.plugin.settings.knownCalendars;
+		const settings = this.plugin.settings;
+		const calendars = settings.knownCalendars;
 		const hasAccounts = this.plugin.connectedAccounts().length > 0;
+
+		const writable = calendars.filter((c) => c.accessRole === "owner" || c.accessRole === "writer");
+		const options: Record<string, string> = { "": "First writable primary calendar" };
+		for (const calendar of writable) options[calendar.key] = `${calendar.accountLabel} / ${calendar.name}`;
+		// A choice that disappeared must stay visible, or opening the tab would silently drop it.
+		if (settings.newEventCalendar && !(settings.newEventCalendar in options)) {
+			options[settings.newEventCalendar] = `${settings.newEventCalendar} (unavailable)`;
+		}
 
 		const toggles: SettingDefinition[] = calendars.length
 			? calendars.map((calendar) => ({
@@ -311,6 +329,7 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 					? {
 							placeholder: "Filter calendars",
 							match: (def, query) =>
+								def.name === NEW_EVENT_SETTING ||
 								`${def.name} ${typeof def.desc === "string" ? def.desc : ""}`
 									.toLowerCase()
 									.includes(query.toLowerCase()),
@@ -333,6 +352,11 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 						}),
 			],
 			items: [
+				{
+					name: NEW_EVENT_SETTING,
+					desc: "Used by “+ New event” and the Create event command unless a block sets `new-event`.",
+					control: { type: "dropdown", key: "newEventCalendar", options },
+				},
 				{
 					name: "Default calendars",
 					desc: "Calendars a block shows when it names none. Leave all off to show every calendar.",
@@ -402,6 +426,38 @@ export class CalendarConnectSettingTab extends PluginSettingTab {
 					desc: "Characters of a description shown before it is cut off. 0 hides descriptions.",
 					control: { type: "number", key: "descriptionLength", min: 0, step: 10 },
 				},
+			],
+		};
+	}
+
+	private editingGroup(): SettingDefinitionGroup {
+		return {
+			type: "group",
+			heading: "Editing",
+			items: [
+				{
+					name: "Default event length",
+					desc: "Minutes, for events created with “+ New event”. 5 to 1440.",
+					control: {
+						type: "number",
+						key: "defaultEventMinutes",
+						min: 5,
+						max: 24 * 60,
+						step: 5,
+						validate: (value: number) =>
+							Number.isFinite(value) && value >= 5 && value <= 24 * 60 ? undefined : "Use 5 to 1440 minutes.",
+					},
+				},
+				{
+					name: "Notify guests",
+					desc: "Whether guests get an email when you change or delete an event they are invited to.",
+					control: {
+						type: "dropdown",
+						key: "notifyGuests",
+						options: { ask: "Ask each time", always: "Always", never: "Never" },
+					},
+				},
+				{ name: "Confirm before deleting", control: { type: "toggle", key: "confirmDelete" } },
 			],
 		};
 	}

@@ -2,6 +2,7 @@ import {
 	AuthError,
 	authorizeWith,
 	buildConsent,
+	canWriteWith,
 	GoogleAuth,
 	hasCalendarList,
 	parseRedirect,
@@ -9,7 +10,7 @@ import {
 	randomPastePort,
 	ReauthRequiredError,
 	SCOPE_CALENDAR_LIST,
-	SCOPE_EVENTS_READONLY,
+	SCOPE_EVENTS,
 	type ConsentView,
 	type PendingConsent,
 } from "../src/auth";
@@ -49,7 +50,7 @@ import { requestUrlMock, type ShimRequest, type ShimResponse } from "./obsidian-
 		},
 	};
 	const store = new DeviceTokenStore(backend);
-	const grant: StoredGrant = { refreshToken: "1//refresh", scopes: [SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY] };
+	const grant: StoredGrant = { refreshToken: "1//refresh", scopes: [SCOPE_CALENDAR_LIST, SCOPE_EVENTS] };
 
 	check("token store empty → null", store.load("alex@example.com"), null);
 	store.save("alex@example.com", grant);
@@ -80,11 +81,15 @@ import { requestUrlMock, type ShimRequest, type ShimResponse } from "./obsidian-
 
 // --- Scopes --------------------------------------------------------------------
 
-check("parseScopes string", parseScopes(`${SCOPE_CALENDAR_LIST}  ${SCOPE_EVENTS_READONLY} `), [SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY]);
-check("parseScopes array", parseScopes([SCOPE_EVENTS_READONLY, 4, "", SCOPE_EVENTS_READONLY]), [SCOPE_EVENTS_READONLY]);
+check("parseScopes string", parseScopes(`${SCOPE_CALENDAR_LIST}  ${SCOPE_EVENTS} `), [SCOPE_CALENDAR_LIST, SCOPE_EVENTS]);
+check("parseScopes array", parseScopes([SCOPE_EVENTS, 4, "", SCOPE_EVENTS]), [SCOPE_EVENTS]);
 check("parseScopes missing", parseScopes(undefined), []);
+check("canWriteWith events", canWriteWith([SCOPE_CALENDAR_LIST, SCOPE_EVENTS]), true);
+check("canWriteWith full calendar", canWriteWith(["https://www.googleapis.com/auth/calendar"]), true);
+check("canWriteWith list only", canWriteWith([SCOPE_CALENDAR_LIST]), false);
+check("canWriteWith readonly", canWriteWith(["https://www.googleapis.com/auth/calendar.readonly"]), false);
 check("hasCalendarList", hasCalendarList([SCOPE_CALENDAR_LIST]), true);
-check("hasCalendarList events only", hasCalendarList([SCOPE_EVENTS_READONLY]), false);
+check("hasCalendarList events only", hasCalendarList([SCOPE_EVENTS]), false);
 {
 	let inRange = true;
 	for (let i = 0; i < 200; i++) {
@@ -144,7 +149,7 @@ function formOf(req: ShimRequest): URLSearchParams {
 }
 
 const CONFIG = { clientId: "client-1.apps.googleusercontent.com", clientSecret: "shh" };
-const BOTH = `${SCOPE_CALENDAR_LIST} ${SCOPE_EVENTS_READONLY}`;
+const BOTH = `${SCOPE_CALENDAR_LIST} ${SCOPE_EVENTS}`;
 
 serial(async () => {
 	setSleep(async () => undefined);
@@ -157,7 +162,7 @@ serial(async () => {
 		check("consent client_id", params.get("client_id"), CONFIG.clientId);
 		check("consent redirect_uri", params.get("redirect_uri"), "http://127.0.0.1:50000");
 		check("consent response_type", params.get("response_type"), "code");
-		check("consent scopes", (params.get("scope") ?? "").split(" ").sort(), [SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY].sort());
+		check("consent scopes", (params.get("scope") ?? "").split(" ").sort(), [SCOPE_CALENDAR_LIST, SCOPE_EVENTS].sort());
 		check("consent offline", params.get("access_type"), "offline");
 		check("consent prompt", params.get("prompt"), "select_account consent");
 		check("consent S256", params.get("code_challenge_method"), "S256");
@@ -177,7 +182,7 @@ serial(async () => {
 		check("consent state and verifier are fresh", second.state !== consent.state && second.verifier !== consent.verifier, true);
 
 		// GoogleAuth: coalescing, no grant change when nothing changed.
-		let grant: StoredGrant | null = { refreshToken: "1//r1", scopes: [SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY] };
+		let grant: StoredGrant | null = { refreshToken: "1//r1", scopes: [SCOPE_CALENDAR_LIST, SCOPE_EVENTS] };
 		const changes: StoredGrant[] = [];
 		const auth = new GoogleAuth(
 			() => CONFIG,
@@ -188,6 +193,7 @@ serial(async () => {
 			}
 		);
 		check("GoogleAuth connected", auth.isConnected(), true);
+		check("GoogleAuth canWrite", auth.canWrite(), true);
 
 		let tokenCalls = 0;
 		let lastForm: URLSearchParams | null = null;
@@ -219,11 +225,12 @@ serial(async () => {
 		// Rotation and scope changes reach onGrantChange.
 		requestUrlMock.handler = () => json(200, { access_token: "at-rot", expires_in: 3599, refresh_token: "1//r2", scope: BOTH });
 		await auth.refresh();
-		check("rotated refresh token → onGrantChange", changes, [{ refreshToken: "1//r2", scopes: [SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY] }]);
+		check("rotated refresh token → onGrantChange", changes, [{ refreshToken: "1//r2", scopes: [SCOPE_CALENDAR_LIST, SCOPE_EVENTS] }]);
 		changes.length = 0;
 		requestUrlMock.handler = () => json(200, { access_token: "at-ro", expires_in: 3599, scope: SCOPE_CALENDAR_LIST });
 		await auth.refresh();
 		check("narrowed scopes → onGrantChange", changes, [{ refreshToken: "1//r2", scopes: [SCOPE_CALENDAR_LIST] }]);
+		check("canWrite follows the grant", auth.canWrite(), false);
 		changes.length = 0;
 		requestUrlMock.handler = () => json(200, { access_token: "at-same", expires_in: 3599, refresh_token: "1//r2" });
 		await auth.refresh();
@@ -276,7 +283,7 @@ serial(async () => {
 		check("authorize returns the grant", [granted.refreshToken, granted.accessToken, granted.scopes], [
 			"1//new",
 			"at-new",
-			[SCOPE_CALENDAR_LIST, SCOPE_EVENTS_READONLY],
+			[SCOPE_CALENDAR_LIST, SCOPE_EVENTS],
 		]);
 		check("authorize closed the UI once", closed, 1);
 		const exchange = exchanged[0];
@@ -301,7 +308,7 @@ serial(async () => {
 		const urls: string[] = [];
 		requestUrlMock.handler = (req) => {
 			urls.push(req.url);
-			return json(200, { access_token: "at", expires_in: 3599, refresh_token: "1//partial", scope: SCOPE_EVENTS_READONLY });
+			return json(200, { access_token: "at", expires_in: 3599, refresh_token: "1//partial", scope: SCOPE_EVENTS });
 		};
 		const partial = authorizeWith({ ...CONFIG, port: 0 }, presenter);
 		await new Promise((resolve) => setTimeout(resolve, 10));
@@ -316,6 +323,15 @@ serial(async () => {
 		check("missing calendar-list scope → AuthError", /tick every box/.test(partialMessage), true);
 		await new Promise((resolve) => setTimeout(resolve, 10));
 		check("partial grant is revoked", urls.some((u) => u.includes("/revoke")), true);
+
+		// Missing write scope is fine.
+		views.length = 0;
+		requestUrlMock.handler = () => json(200, { access_token: "at", expires_in: 3599, refresh_token: "1//ro", scope: SCOPE_CALENDAR_LIST });
+		const readOnly = authorizeWith({ ...CONFIG, port: 0 }, presenter);
+		await new Promise((resolve) => setTimeout(resolve, 10));
+		views[0].submit(`code=abc&state=${new URL(views[0].url).searchParams.get("state")}`);
+		const roGrant = await readOnly;
+		check("read-only grant connects", canWriteWith(roGrant.scopes), false);
 
 		await rejects("authorize without a client", () => authorizeWith({ clientId: "", clientSecret: "", port: 0 }, presenter), AuthError);
 

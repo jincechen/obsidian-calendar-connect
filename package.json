@@ -1,7 +1,7 @@
 {
 	"name": "obsidian-calendar-connect",
 	"version": "0.2.0",
-	"description": "List Google Calendar events from a compact code block in Obsidian.",
+	"description": "List, create and edit Google Calendar events from a compact code block in Obsidian.",
 	"main": "main.js",
 	"scripts": {
 		"dev": "node esbuild.config.mjs",

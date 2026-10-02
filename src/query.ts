@@ -30,8 +30,12 @@ export interface BlockQuery {
 	emptyMessage: string;
 	/** Seconds; 0 disables, otherwise at least 60. */
 	refresh: number;
-	/** Footer with the last-updated time and refresh. */
+	/** Footer with "+ New event", last-updated time and refresh. */
 	controls: boolean;
+	/** Raw calendar term for "+ New event" (resolved by the block), false = hide button, undefined = setting. */
+	newEventCalendar?: string | false;
+	/** `false` makes every event in the block open read-only. */
+	editable: boolean;
 }
 
 export interface ParsedQuery {
@@ -109,6 +113,8 @@ const KEY_ALIASES: Record<string, string> = {
 	emptymessage: "empty",
 	refresh: "refresh",
 	controls: "controls",
+	newevent: "newevent",
+	editable: "editable",
 };
 
 function normaliseKey(key: string): string {
@@ -254,6 +260,17 @@ function periodEnd(from: Moment, periodText: string): Moment {
 	return end.subtract(1, "day").endOf("day");
 }
 
+/** `new-event: false` hides the button; a term picks the calendar; anything else defers to settings. */
+function toNewEvent(value: unknown): string | false | undefined {
+	if (value === false) return false;
+	if (value === true || value === null || value === undefined) return undefined;
+	const text = String(value).trim();
+	if (!text) return undefined;
+	if (["false", "no", "off"].includes(text.toLowerCase())) return false;
+	if (["true", "yes", "on"].includes(text.toLowerCase())) return undefined;
+	return text;
+}
+
 export function parseQuery(source: string, settings: CalendarConnectSettings): ParsedQuery {
 	const warnings: string[] = [];
 
@@ -356,6 +373,8 @@ export function parseQuery(source: string, settings: CalendarConnectSettings): P
 			emptyMessage: emptyRaw === undefined || emptyRaw === null ? "No events in this period." : String(emptyRaw),
 			refresh,
 			controls: has("controls") ? toBool(get("controls"), "controls") : true,
+			newEventCalendar: toNewEvent(get("newevent")),
+			editable: has("editable") ? toBool(get("editable"), "editable") : true,
 		},
 	};
 }

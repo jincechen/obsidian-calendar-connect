@@ -21,6 +21,7 @@ const calendar = makeCalendar();
 
 const fullRaw: RawEvent = {
 	id: "evt1",
+	etag: '"123"',
 	status: "confirmed",
 	htmlLink: "https://www.google.com/calendar/event?eid=abc",
 	summary: "  Design review  ",
@@ -29,20 +30,27 @@ const fullRaw: RawEvent = {
 	start: { dateTime: "2026-08-14T09:30:00+01:00", timeZone: "Europe/London" },
 	end: { dateTime: "2026-08-14T10:00:00+01:00", timeZone: "Europe/London" },
 	recurringEventId: "series1",
-	organizer: { email: "sam@example.com", displayName: "Sam" },
+	originalStartTime: { dateTime: "2026-08-14T09:30:00+01:00" },
+	organizer: { email: "sam@example.com", displayName: "Sam", self: false },
 	attendees: [
 		{ email: "sam@example.com", displayName: "Sam", organizer: true, responseStatus: "accepted" },
 		{ email: "alex@example.com", self: true, responseStatus: "tentative", optional: true },
 		{ email: "room@resource.calendar.google.com", resource: true, responseStatus: "accepted" },
 	],
+	guestsCanModify: true,
+	locked: true,
+	privateCopy: true,
+	eventType: "focusTime",
+	attendeesOmitted: true,
 	conferenceData: { entryPoints: [{ entryPointType: "phone", uri: "tel:+1" }, { entryPointType: "video", uri: "https://meet.google.com/abc" }] },
 };
 {
 	const event = normaliseEvent(fullRaw, calendar);
 	check("normalise returns an event", event !== null, true);
 	if (event) {
-		check("normalise identity", [event.id, event.calendarKey, event.calendarId, event.accountId, event.accountLabel], [
+		check("normalise identity", [event.id, event.etag, event.calendarKey, event.calendarId, event.accountId, event.accountLabel], [
 			"evt1",
+			'"123"',
 			calendar.key,
 			calendar.id,
 			calendar.accountId,
@@ -50,7 +58,7 @@ const fullRaw: RawEvent = {
 		]);
 		check("normalise title trimmed", event.title, "Design review");
 		check("normalise location trimmed", event.location, "Room 4");
-		check("normalise HTML description", event.description, "Agenda\nspecs & plans");
+		check("normalise HTML description", [event.description, event.descriptionIsHtml], ["Agenda\nspecs & plans", true]);
 		check("normalise times", [event.allDay, event.start.toISOString(), event.end.toISOString()], [
 			false,
 			"2026-08-14T08:30:00.000Z",
@@ -58,14 +66,24 @@ const fullRaw: RawEvent = {
 		]);
 		check("normalise meet url from conference data", event.meetUrl, "https://meet.google.com/abc");
 		check("normalise link", event.link, "https://www.google.com/calendar/event?eid=abc");
-		check("normalise organizer", event.organizer, "Sam");
+		check("normalise organizer", [event.organizer, event.organizerSelf], ["Sam", false]);
 		check("normalise attendees", event.attendees, [
 			{ email: "sam@example.com", name: "Sam", response: "accepted", self: false, organizer: true, optional: false, resource: false },
 			{ email: "alex@example.com", response: "tentative", self: true, organizer: false, optional: true, resource: false },
 			{ email: "room@resource.calendar.google.com", response: "accepted", self: false, organizer: false, optional: false, resource: true },
 		]);
 		check("normalise selfResponse", event.selfResponse, "tentative");
-		check("normalise recurring", event.recurring, true);
+		check("normalise recurring", [event.recurring, event.recurringEventId], [true, "series1"]);
+		check("normalise flags", [event.guestsCanModify, event.locked, event.privateCopy, event.eventType, event.attendeesOmitted], [
+			true,
+			true,
+			true,
+			"focusTime",
+			true,
+		]);
+		check("normalise raw start/end verbatim", [event.rawStart, event.rawEnd], [fullRaw.start, fullRaw.end]);
+		check("normalise raw attendees verbatim", event.rawAttendees, fullRaw.attendees);
+		check("normalise raw values are copies", event.rawStart !== fullRaw.start && event.rawAttendees[0] !== fullRaw.attendees?.[0], true);
 		check("normalise status", event.status, "confirmed");
 	}
 }
@@ -77,7 +95,7 @@ const fullRaw: RawEvent = {
 			description: "Plain a < b > c",
 			start: { date: "2026-08-14" },
 			end: { date: "2026-08-17" },
-			organizer: { email: calendar.id },
+			organizer: { email: calendar.id, self: true },
 			hangoutLink: "https://meet.google.com/xyz",
 		},
 		calendar
@@ -85,8 +103,16 @@ const fullRaw: RawEvent = {
 	check("all-day parsed", event?.allDay, true);
 	check("all-day start", event?.start.format("YYYY-MM-DD HH:mm"), "2026-08-14 00:00");
 	check("all-day end is inclusive", event?.end.format("YYYY-MM-DD HH:mm"), "2026-08-16 23:59");
-	check("plain description kept verbatim", event?.description, "Plain a < b > c");
-	check("defaults", [event?.attendees, event?.recurring], [[], false]);
+	check("plain description kept verbatim", [event?.description, event?.descriptionIsHtml], ["Plain a < b > c", false]);
+	check("defaults", [event?.eventType, event?.guestsCanModify, event?.locked, event?.attendees, event?.rawAttendees, event?.recurring], [
+		"default",
+		false,
+		false,
+		[],
+		[],
+		false,
+	]);
+	check("organizerSelf", event?.organizerSelf, true);
 	check("hangoutLink wins", event?.meetUrl, "https://meet.google.com/xyz");
 }
 {
@@ -162,7 +188,7 @@ serial(async () => {
 			check("persistent 401 → kind auth", [error instanceof CalendarApiError, (error as CalendarApiError).kind, seen.length], [true, "auth", 2]);
 		}
 
-		// listCalendars sanitises colour, skips deleted, pages.
+		// listCalendars keeps accessRole, sanitises colour, skips deleted, pages.
 		seen.length = 0;
 		api = (req) =>
 			req.url.includes("pageToken=p2")
@@ -176,9 +202,9 @@ serial(async () => {
 						],
 				  });
 		const calendars = await client.listCalendars();
-		check("listCalendars entries", calendars.map((c) => [c.key, c.name, c.color, c.primary, c.timeZone]), [
-			["alex@example.com::alex@example.com", "Me", "#9fe1e7", true, "Europe/London"],
-			["alex@example.com::team@group.calendar.google.com", "Team", "", false, undefined],
+		check("listCalendars entries", calendars.map((c) => [c.key, c.name, c.color, c.accessRole, c.primary, c.timeZone]), [
+			["alex@example.com::alex@example.com", "Me", "#9fe1e7", "owner", true, "Europe/London"],
+			["alex@example.com::team@group.calendar.google.com", "Team", "", "reader", false, undefined],
 		]);
 		check("listCalendars paged", seen.length, 2);
 
@@ -199,6 +225,118 @@ serial(async () => {
 			"2026-08-14T00:00:00.000Z",
 		]);
 		check("listEvents normalises and skips id-less events", events.map((e) => e.id), ["evt1"]);
+
+		// patch: If-Match, nulls preserved, sendUpdates, rate-only.
+		seen.length = 0;
+		api = () => json(200, { id: "e/1", etag: '"2"' });
+		const patched = await client.patchEvent(
+			"alex@example.com",
+			"e/1",
+			{ start: { date: "2026-08-14", dateTime: null }, end: { date: "2026-08-15", dateTime: null } },
+			{ etag: '"1"', sendUpdates: "none" }
+		);
+		const patchReq = seen[0];
+		check("patch method and path", [patchReq.method, new URL(patchReq.url).pathname], ["PATCH", "/calendar/v3/calendars/alex%40example.com/events/e%2F1"]);
+		check("patch sends If-Match", patchReq.headers?.["If-Match"], '"1"');
+		check("patch keeps nulls", patchReq.body, '{"start":{"date":"2026-08-14","dateTime":null},"end":{"date":"2026-08-15","dateTime":null}}');
+		check("patch content type", patchReq.contentType, "application/json");
+		check("patch sendUpdates", new URL(patchReq.url).searchParams.get("sendUpdates"), "none");
+		check("patch returns the event", patched.etag, '"2"');
+
+		seen.length = 0;
+		await client.patchEvent("alex@example.com", "e1", { summary: "x" }, { sendUpdates: "all" });
+		check("patch without etag sends no If-Match", seen[0].headers?.["If-Match"], undefined);
+
+		// 412 → conflict, never retried.
+		seen.length = 0;
+		api = () => json(412, { error: { message: "Precondition Failed", errors: [{ reason: "conditionNotMet" }] } });
+		try {
+			await client.patchEvent("alex@example.com", "e1", { summary: "x" }, { etag: '"old"', sendUpdates: "none" });
+			check("412 rejects", "resolved", "rejected");
+		} catch (error) {
+			check("412 → CalendarApiError conflict", [error instanceof CalendarApiError, (error as CalendarApiError).kind, (error as CalendarApiError).status, seen.length], [
+				true,
+				"conflict",
+				412,
+				1,
+			]);
+		}
+
+		// patch is not retried on 500 (rate-only).
+		seen.length = 0;
+		api = () => json(500, { error: { message: "Backend Error" } });
+		try {
+			await client.patchEvent("alex@example.com", "e1", { summary: "x" }, { sendUpdates: "none" });
+		} catch (error) {
+			check("patch 500 → other, single attempt", [(error as CalendarApiError).kind, seen.length], ["other", 1]);
+		}
+
+		// 403 mapping.
+		const cases: Array<[number, unknown, string]> = [
+			[403, { error: { message: "Rate Limit Exceeded", errors: [{ reason: "rateLimitExceeded" }] } }, "rateLimited"],
+			[403, { error: { message: "Quota", errors: [{ reason: "quotaExceeded" }] } }, "quota"],
+			[403, { error: { message: "Daily Limit Exceeded", errors: [{ reason: "dailyLimitExceeded" }] } }, "quota"],
+			[403, { error: { message: "Google Calendar API has not been used in project 123 before or it is disabled.", errors: [{ reason: "accessNotConfigured" }] } }, "apiDisabled"],
+			[403, { error: { message: "Calendar API is disabled" } }, "apiDisabled"],
+			[403, { error: { message: "Forbidden", errors: [{ reason: "forbiddenForNonOrganizer" }] } }, "forbidden"],
+			[404, { error: { message: "Not Found" } }, "notFound"],
+			[410, { error: { message: "Gone" } }, "notFound"],
+			[429, { error: { message: "Too many" } }, "rateLimited"],
+			[400, { error: { message: "Bad Request" } }, "other"],
+		];
+		for (const [status, body, kind] of cases) {
+			api = () => json(status, body);
+			try {
+				await client.patchEvent("c", "e", {}, { sendUpdates: "none" });
+				check(`${status} rejects`, "resolved", "rejected");
+			} catch (error) {
+				check(`status ${status} ${JSON.stringify(body).slice(0, 60)} → ${kind}`, (error as CalendarApiError).kind, kind);
+			}
+		}
+
+		// delete: 404/410 resolve; sendUpdates passed.
+		for (const status of [204, 404, 410]) {
+			seen.length = 0;
+			api = () => ({ status, json: null, text: "", headers: {} });
+			let ok = true;
+			try {
+				await client.deleteEvent("alex@example.com", "e1", { sendUpdates: "all" });
+			} catch {
+				ok = false;
+			}
+			check(`delete ${status} resolves`, [ok, seen[0].method, new URL(seen[0].url).searchParams.get("sendUpdates")], [true, "DELETE", "all"]);
+		}
+		api = () => json(403, { error: { message: "Forbidden", errors: [{ reason: "forbiddenForNonOrganizer" }] } });
+		try {
+			await client.deleteEvent("alex@example.com", "e1", { sendUpdates: "none" });
+			check("delete 403 rejects", "resolved", "rejected");
+		} catch (error) {
+			check("delete 403 → forbidden", (error as CalendarApiError).kind, "forbidden");
+		}
+
+		// insert: 503 retried (idempotent), 409 → GET the existing event.
+		seen.length = 0;
+		let inserts = 0;
+		api = (req) => {
+			if (req.method === "POST") return ++inserts === 1 ? json(503, {}) : json(409, { error: { message: "The requested identifier already exists.", errors: [{ reason: "duplicate" }] } });
+			return json(200, { id: "newid123", summary: "Created", etag: '"9"' });
+		};
+		const inserted = await client.insertEvent("alex@example.com", { id: "newid123", summary: "Created" }, { sendUpdates: "none" });
+		check("insert retries then fetches on 409", [inserts, inserted.id, seen.map((r) => r.method)], [2, "newid123", ["POST", "POST", "GET"]]);
+		check("insert body", seen[0].body, '{"id":"newid123","summary":"Created"}');
+		check("insert follow-up GET path", new URL(seen[2].url).pathname, "/calendar/v3/calendars/alex%40example.com/events/newid123");
+
+		// move.
+		seen.length = 0;
+		api = () => json(200, { id: "e1" });
+		await client.moveEvent("alex@example.com", "e1", "team@group.calendar.google.com", { sendUpdates: "externalOnly" });
+		const moveUrl = new URL(seen[0].url);
+		check("move request", [seen[0].method, moveUrl.pathname, moveUrl.searchParams.get("destination"), moveUrl.searchParams.get("sendUpdates")], [
+			"POST",
+			"/calendar/v3/calendars/alex%40example.com/events/e1/move",
+			"team@group.calendar.google.com",
+			"externalOnly",
+		]);
 
 		// Network failure → CalendarApiError network; reauth passes through.
 		api = () => {

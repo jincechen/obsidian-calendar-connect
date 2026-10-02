@@ -2,6 +2,7 @@ import { moment } from "../src/moment-shim";
 import {
 	bucketByDay,
 	formatDuration,
+	nextSlot,
 	parseDuration,
 	relativeStart,
 	resolveDate,
@@ -38,7 +39,19 @@ check("duration all-day", formatDuration(start.clone().startOf("day"), start.clo
 check("time label", timeLabel(makeEvent(), true), "09:30–10:00");
 check("time label 12h", timeLabel(makeEvent(), false), "9:30am–10:00am");
 
+// ---- nextSlot ----
 const at = (text: string) => moment(text);
+const hm = (m: ReturnType<typeof moment>) => m.format("YYYY-MM-DD HH:mm:ss");
+check("next slot rounds up", hm(nextSlot(at("2026-08-14T09:10"))), "2026-08-14 09:30:00");
+check("next slot is strictly after a boundary", hm(nextSlot(at("2026-08-14T09:30"))), "2026-08-14 10:00:00");
+check("next slot zeroes seconds", hm(nextSlot(at("2026-08-14T09:29:45"))), "2026-08-14 09:30:00");
+check("next slot just past a boundary", hm(nextSlot(at("2026-08-14T09:30:20"))), "2026-08-14 10:00:00");
+check("next slot crosses midnight", hm(nextSlot(at("2026-08-14T23:45"))), "2026-08-15 00:00:00");
+check("next slot custom step", hm(nextSlot(at("2026-08-14T09:10"), 15)), "2026-08-14 09:15:00");
+check("next slot hour step", hm(nextSlot(at("2026-08-14T09:10"), 60)), "2026-08-14 10:00:00");
+const unmoved = at("2026-08-14T09:10");
+nextSlot(unmoved);
+check("next slot does not mutate", hm(unmoved), "2026-08-14 09:10:00");
 
 // ---- timeState ----
 const timed = makeEvent(); // 09:30–10:00 on 2026-08-14
