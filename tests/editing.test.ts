@@ -11,6 +11,7 @@ import {
 	newDraft,
 	newEventId,
 	pickTimeZone,
+	rebaseDraft,
 	scopeOptions,
 	validateDraft,
 	withStart,
@@ -481,3 +482,16 @@ check(
 	pickTimeZone(undefined, makeCalendar({ timeZone: undefined })),
 	Intl.DateTimeFormat().resolvedOptions().timeZone
 );
+
+// --- rebaseDraft -------------------------------------------------------------------------
+{
+	const original = { ...draftFromEvent(makeEvent()), guests: ["a@x.com", "b@x.com"] };
+	const mine = { ...original, location: "Room 9", guests: ["a@x.com", "c@x.com"] };
+	const fresh = { ...original, title: "Renamed elsewhere", guests: ["a@x.com", "b@x.com", "d@x.com"] };
+	const rebased = rebaseDraft(original, mine, fresh);
+	check("rebase: keeps the remote title", rebased.title, "Renamed elsewhere");
+	check("rebase: applies my location", rebased.location, "Room 9");
+	check("rebase: merges guests", rebased.guests, ["a@x.com", "d@x.com", "c@x.com"]);
+	const again = diffDraft(fresh, rebased);
+	check("rebase: only my edits remain to write", [again.title, again.location, again.guests, again.time], [false, true, true, false]);
+}

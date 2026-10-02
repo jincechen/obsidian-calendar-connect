@@ -26,6 +26,7 @@ import {
 	newEventId,
 	normaliseEmail,
 	pickTimeZone,
+	rebaseDraft,
 	scopeOptions,
 	validateDraft,
 	withStart,
@@ -34,7 +35,7 @@ import {
 	type EventDraft,
 	type RsvpResponse,
 } from "../editing";
-import { askNotifyGuests, askRecurringScope, confirmDelete, type RecurringScope } from "./prompts";
+import { askConflict, askNotifyGuests, askRecurringScope, confirmDelete, type RecurringScope } from "./prompts";
 
 export interface EditContext {
 	app: App;
@@ -564,7 +565,7 @@ class EventModal extends Modal {
 			const keys = await this.write(client, event, this.draft, changes, scope, sendUpdates);
 			this.succeed(keys);
 		} catch (error) {
-			this.handleSaveError(error);
+			await this.handleSaveError(error, client, scope, sendUpdates);
 		} finally {
 			this.setBusy(false);
 		}
@@ -624,7 +625,12 @@ class EventModal extends Modal {
 		this.finish();
 	}
 
-	private handleSaveError(error: unknown): void {
+	private async handleSaveError(
+		error: unknown,
+		client: GoogleCalendarClient,
+		scope: RecurringScope | null,
+		sendUpdates: SendUpdates
+	): Promise<void> {
 		const event = this.event as CalEvent;
 		const keys = [event.calendarKey, this.draft.calendarKey];
 		if (error instanceof PartialSaveError) {
@@ -641,7 +647,67 @@ class EventModal extends Modal {
 			this.toViewMode(describeError(error));
 			return;
 		}
-		this.showError(describeError(error));
+		if (!isKind(error, "conflict")) {
+			this.showError(describeError(error));
+			return;
+		}
+
+		const choice = await askConflict(this.app);
+		if (!choice) return;
+		try {
+			const fresh = await this.fetchFresh(client, event);
+			if (!fresh) {
+				this.showError("This event no longer exists in Google Calendar.");
+				return;
+			}
+			if (choice === "reload") {
+				this.resetTo(fresh);
+				return;
+			}
+			// Apply: replay the user's edits on the fresh copy, then try once more.
+			const freshDraft = draftFromEvent(fresh);
+			const rebased = rebaseDraft(this.original, this.draft, freshDraft);
+			const again = diffDraft(freshDraft, rebased);
+			this.event = fresh;
+			this.original = freshDraft;
+			this.draft = rebased;
+			if (!again.any) {
+				this.succeed([fresh.calendarKey]);
+				return;
+			}
+			if (scope === "allEvents" && again.dateChanged) {
+				this.render();
+				this.showError("The date changed in Google Calendar. Review the event and save again.");
+				return;
+			}
+			this.succeed(await this.write(client, fresh, rebased, again, scope, sendUpdates));
+		} catch (retryError) {
+			if (retryError instanceof PartialSaveError || isUncertain(retryError)) {
+				new Notice("Couldn't confirm the save — refreshing to check");
+				this.ctx.afterChange([...new Set(keys)]);
+				this.finish();
+			} else if (isKind(retryError, "forbidden")) {
+				this.toViewMode(describeError(retryError));
+			} else {
+				this.render();
+				this.showError(describeError(retryError));
+			}
+		}
+	}
+
+	private async fetchFresh(client: GoogleCalendarClient, event: CalEvent): Promise<CalEvent | null> {
+		const raw = await client.getEvent(event.calendarId, event.id);
+		return normaliseEvent(raw, calendarOf(this.ctx, event));
+	}
+
+	private resetTo(fresh: CalEvent): void {
+		this.event = fresh;
+		this.editability = this.computeEditability(fresh);
+		if (!this.editability.canEdit) this.mode = "view";
+		this.original = draftFromEvent(fresh);
+		this.draft = { ...this.original, guests: [...this.original.guests] };
+		this.errorText = null;
+		this.render();
 	}
 
 	private toViewMode(reason: string): void {

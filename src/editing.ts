@@ -220,6 +220,35 @@ export function diffDraft(original: EventDraft, draft: EventDraft): ChangeSet {
 	return { ...changes, any: Object.values(changes).some(Boolean) };
 }
 
+/**
+ * After a conflict: the user's edits replayed onto the fresh copy. Fields the
+ * user did not touch take the fresh values, so changes made elsewhere are kept
+ * rather than reverted; guests merge as "fresh + mine added − mine removed".
+ * Diffing `fresh` against the result yields exactly what still needs writing.
+ */
+export function rebaseDraft(original: EventDraft, mine: EventDraft, fresh: EventDraft): EventDraft {
+	const changed = diffDraft(original, mine);
+	const result = { ...fresh, guests: [...fresh.guests] };
+	if (changed.title) result.title = mine.title;
+	if (changed.location) result.location = mine.location;
+	if (changed.description) result.description = mine.description;
+	if (changed.calendar) result.calendarKey = mine.calendarKey;
+	if (changed.time) {
+		result.allDay = mine.allDay;
+		result.startDate = mine.startDate;
+		result.startTime = mine.startTime;
+		result.endDate = mine.endDate;
+		result.endTime = mine.endTime;
+	}
+	if (changed.guests) {
+		const removed = original.guests.filter((g) => !mine.guests.includes(g));
+		const added = mine.guests.filter((g) => !original.guests.includes(g));
+		result.guests = result.guests.filter((g) => !removed.includes(g));
+		for (const g of added) if (!result.guests.includes(g)) result.guests.push(g);
+	}
+	return result;
+}
+
 export interface ScopeOptions {
 	thisEvent: boolean;
 	allEvents: boolean;

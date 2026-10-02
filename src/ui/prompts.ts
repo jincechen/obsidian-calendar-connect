@@ -1,6 +1,6 @@
 /**
  * Small promise-based questions the editing flows ask: recurring scope, whether
- * to notify guests, and delete confirmation.
+ * to notify guests, delete confirmation, and what to do after a 412 conflict.
  * Every prompt resolves to null when dismissed (Esc, ×, click outside).
  */
 import { App, ButtonComponent, Modal } from "obsidian";
@@ -138,4 +138,21 @@ export async function confirmDelete(app: App, title: string): Promise<boolean> {
 		],
 	});
 	return value === true;
+}
+
+export type ConflictChoice = "reload" | "apply";
+
+/** Null = cancel: keep the modal open with the user's edits. */
+export async function askConflict(app: App): Promise<ConflictChoice | null> {
+	const value = await choose<ConflictChoice | "cancel">(app, {
+		title: "Changed in Google Calendar",
+		message:
+			"This event was changed somewhere else since you opened it. Reload it (your edits are discarded) or apply your changes on top?",
+		options: [
+			{ label: "Cancel", value: "cancel" },
+			{ label: "Reload event", value: "reload" },
+			{ label: "Apply my changes", value: "apply", cta: true },
+		],
+	});
+	return value === "cancel" ? null : value;
 }
